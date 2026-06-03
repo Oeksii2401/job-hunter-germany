@@ -16,6 +16,51 @@ LANG_NAMES = {
     "ps": "پښتو ژبه"
 }
 
+# Ключевые слова которые встречаются в настоящих резюме
+CV_KEYWORDS = [
+    # Русский
+    "опыт работы", "образование", "навыки", "должность", "компания",
+    "университет", "институт", "специальность", "резюме", "достижения",
+    # Немецкий
+    "berufserfahrung", "ausbildung", "kenntnisse", "lebenslauf", "arbeitgeber",
+    "universität", "hochschule", "fähigkeiten", "tätigkeiten", "abschluss",
+    # Английский
+    "experience", "education", "skills", "employment", "university",
+    "bachelor", "master", "degree", "responsibilities", "achievements",
+    # Украинский
+    "досвід роботи", "освіта", "навички", "посада", "компанія",
+    # Арабский / Пашто (латинизация)
+    "خبرة", "تعليم", "مهارات", "وظيفة",
+]
+
+def is_full_cv(text: str) -> bool:
+    """
+    Определяет является ли текст полноценным резюме или просто кратким запросом.
+    Логика: если текст длинный И содержит ключевые слова резюме — это резюме.
+    """
+    if not text or not text.strip():
+        return False
+
+    text_lower = text.lower()
+    word_count = len(text.split())
+
+    # Слишком короткий текст — точно не резюме
+    if word_count < 30:
+        return False
+
+    # Считаем сколько ключевых слов резюме найдено
+    keyword_matches = sum(1 for kw in CV_KEYWORDS if kw in text_lower)
+
+    # Если длинный текст и есть хотя бы 2 ключевых слова — резюме
+    if word_count >= 100 and keyword_matches >= 2:
+        return True
+
+    # Если средний текст и много ключевых слов — тоже резюме
+    if word_count >= 50 and keyword_matches >= 3:
+        return True
+
+    return False
+
 def groq_ask(prompt: str) -> str:
     response = groq_client.chat.completions.create(
         model=GROQ_MODEL,
@@ -46,7 +91,7 @@ async def parse_cv(cv_text: str, lang: str = "ru") -> dict:
 
 ШАГ 1 — ФАКТЫ: Извлеки базовую информацию (имя, локация, опыт, навыки, языки).
 
-ШАГ 2 — ИНТЕРПРЕТАЦИЯ: Что на самом деле умеет этот человек? 
+ШАГ 2 — ИНТЕРПРЕТАЦИЯ: Что на самом деле умеет этот человек?
 Примеры неочевидных связей:
 - Юрист + Python + Prompt Engineering = LegalTech специалист, AI Compliance эксперт
 - Врач + менеджмент = Healthcare Operations Manager
@@ -59,18 +104,21 @@ async def parse_cv(cv_text: str, lang: str = "ru") -> dict:
 - Ищи компании где уникальный микс навыков кандидата является преимуществом, а не недостатком
 
 ШАГ 4 — УТОЧНЯЮЩИЕ ВОПРОСЫ: Задай 3-5 вопросов которые помогут раскрыть скрытый потенциал.
-Хорошие вопросы звучат так:
-- "Вы упоминаете что работали с командой — расскажите, каких конкретных результатов вы достигли?"
+Хорошие вопросы:
+- "Вы упоминаете что работали с командой — расскажите, каких конкретных результатов достигли?"
 - "Вы используете Python в работе — для каких задач? Есть примеры автоматизации?"
-- Плохой вопрос: "Укажите желаемую зарплату" — слишком банально для первого контакта
+Плохой вопрос: "Укажите желаемую зарплату" — слишком банально
 
-РЕЗЮМЕ КАНДИДАТА:
+ВАЖНО: Если в тексте мало данных (человек написал только профессию без деталей) —
+задавай вопросы которые помогут получить конкретные достижения и цифры.
+
+РЕЗЮМЕ / ПРОФИЛЬ КАНДИДАТА:
 {cv_text}
 
 Отвечай СТРОГО в JSON без markdown блоков и без лишних комментариев:
 {{
-  "name": "полное имя кандидата",
-  "location": "город, страна (как указано в резюме)",
+  "name": "полное имя кандидата (или пустая строка если не указано)",
+  "location": "город, страна (как указано или пустая строка)",
   "experience_years": 0,
   "primary_domain": "основная сфера деятельности (1-3 слова, на {lang_name})",
   "hidden_competencies": [
@@ -78,7 +126,7 @@ async def parse_cv(cv_text: str, lang: str = "ru") -> dict:
     "неочевидная компетенция 2 — объясни почему она есть"
   ],
   "cross_domain_opportunities": [
-    "конкретное название должности в DACH которая подходит",
+    "конкретное название должности в DACH",
     "ещё одна должность",
     "ещё одна"
   ],
@@ -116,15 +164,15 @@ async def parse_cv(cv_text: str, lang: str = "ru") -> dict:
     except Exception as e:
         logging.error(f"CV Parser error: {e}")
         fallback_questions = {
-            "ru": ["Какую должность вы ищете в первую очередь?", "В каком городе Германии вы хотите работать?", "Какой у вас уровень немецкого языка?"],
-            "de": ["Welche Position suchen Sie in erster Linie?", "In welcher deutschen Stadt möchten Sie arbeiten?", "Wie ist Ihr Deutschniveau?"],
-            "en": ["What position are you primarily looking for?", "Which German city do you want to work in?", "What is your German language level?"],
-            "uk": ["Яку посаду ви шукаєте насамперед?", "У якому місті Німеччини ви хочете працювати?", "Який у вас рівень німецької мови?"],
-            "ar": ["ما المنصب الذي تبحث عنه في المقام الأول؟", "في أي مدينة ألمانية تريد العمل؟", "ما مستوى لغتك الألمانية؟"],
-            "ps": ["تاسو لومړی کوم دنده لټوئ؟", "د جرمني کوم ښار کې کار کول غواړئ؟", "ستاسو د جرمني ژبې کچه څه ده؟"]
+            "ru": ["Какую должность вы ищете?", "В каком городе Германии хотите работать?", "Какой уровень немецкого языка?"],
+            "de": ["Welche Position suchen Sie?", "In welcher deutschen Stadt möchten Sie arbeiten?", "Wie ist Ihr Deutschniveau?"],
+            "en": ["What position are you looking for?", "Which German city do you want to work in?", "What is your German language level?"],
+            "uk": ["Яку посаду шукаєте?", "У якому місті Німеччини хочете працювати?", "Який рівень німецької мови?"],
+            "ar": ["ما المنصب الذي تبحث عنه؟", "في أي مدينة ألمانية تريد العمل؟", "ما مستوى لغتك الألمانية؟"],
+            "ps": ["کوم دنده لټوئ؟", "د جرمني کوم ښار کې کار کول غواړئ؟", "ستاسو د جرمني ژبې کچه؟"]
         }
         return {
-            "name": "Кандидат",
+            "name": "",
             "location": "",
             "experience_years": 0,
             "primary_domain": "",

@@ -94,10 +94,19 @@ cvUpload.addEventListener('change', async (e) => {
 });
 
 // ─── Add message to chat ──────────────────────
+function linkify(text) {
+    const urlRegex = /(https?:\/\/[^\s]+)/g;
+    return text
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(urlRegex, '<a href="$1" target="_blank" rel="noopener" style="color:#90cdf4;text-decoration:underline;">$1</a>');
+}
+
 function addMessage(sender, text) {
     const div = document.createElement('div');
     div.className = `message ${sender}`;
-    div.textContent = text;
+    div.innerHTML = linkify(text);
     messages.appendChild(div);
     messages.scrollTop = messages.scrollHeight;
 }
