@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Job Hunter Germany</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div id="app">
+        <div id="header">
+            <h1>🇩🇪 Job Hunter Germany</h1>
+            <p>AI-рекрутер для поиска работы в DACH регионе</p>
+        </div>
+
+        <div id="chat-container">
+            <div id="messages"></div>
+
+            <div id="input-area">
+                <div id="buttons-row"></div>
+                <div id="upload-row" style="display:none">
+                    <label for="cv-upload" class="upload-btn">📎 Загрузить PDF резюме</label>
+                    <input type="file" id="cv-upload" accept=".pdf" style="display:none">
+                </div>
+                <div id="text-row">
+                    <textarea id="user-input" placeholder="Введите сообщение..." rows="2"></textarea>
+                    <button id="send-btn">➤</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>
