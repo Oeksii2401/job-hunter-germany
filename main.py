@@ -96,11 +96,20 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
     session = await get_session(session_id)
     lang = session.get("lang", "ru")
 
-    # Приветствие
+    # Приветствие на всех языках
     await websocket.send_json({
         "type": "message",
         "sender": "bot",
-        "text": get_message("ru", "welcome"),
+        "text": (
+            "👋 Привет! / Hallo! / Hello! / Привіт! / مرحبا! / سلام!\n\n"
+            "🇷🇺 Я — Job Hunter Germany. Помогу найти работу в Германии.\n"
+            "🇩🇪 Ich bin Job Hunter Germany. Ich helfe dir, einen Job zu finden.\n"
+            "🇬🇧 I am Job Hunter Germany. I'll help you find a job in Germany.\n"
+            "🇺🇦 Я — Job Hunter Germany. Допоможу знайти роботу в Німеччині.\n"
+            "🇸🇦 أنا Job Hunter Germany. سأساعدك في إيجاد عمل في ألمانيا.\n"
+            "🇦🇫 زه Job Hunter Germany یم. زه به تاسو سره د کار موندلو کې مرسته وکړم.\n\n"
+            "Выбери язык / Wähle Sprache / Choose language / Обери мову / اختر اللغة / ژبه غوره کړئ:"
+        ),
         "buttons": ["🇷🇺 Русский", "🇩🇪 Deutsch", "🇬🇧 English",
                     "🇺🇦 Українська", "🇸🇦 العربية", "🇦🇫 پښتو"]
     })
