@@ -8,6 +8,7 @@ from fastapi.responses import HTMLResponse
 
 from modules.db import init_db, get_session, update_session, save_sent_email
 from modules.cv_parser import parse_cv, extract_pdf_text, is_full_cv
+from modules.cv_analyst import analyze_profile, format_analyst_report
 from modules.job_search import find_companies_for_profile
 from modules.cv_adapter import adapt_cv
 from modules.email_writer import write_email, write_followup
@@ -21,6 +22,7 @@ app = FastAPI()
 
 active_connections: dict = {}
 
+
 @app.on_event("startup")
 async def startup():
     from modules.db import init_db, db_pool
@@ -29,9 +31,11 @@ async def startup():
     start_scheduler(pool, notify_session)
     logging.info("App started")
 
+
 @app.on_event("shutdown")
 async def shutdown():
     stop_scheduler()
+
 
 async def notify_session(session_id: str, event: str, data: dict):
     ws = active_connections.get(session_id)
@@ -59,6 +63,7 @@ async def notify_session(session_id: str, event: str, data: dict):
         })
         await update_session(session_id, step=f"followup_2_{data['id']}")
 
+
 @app.post("/upload-cv")
 async def upload_cv(file: UploadFile = File(...), session_id: str = Form(...)):
     try:
@@ -70,6 +75,7 @@ async def upload_cv(file: UploadFile = File(...), session_id: str = Form(...)):
     except Exception as e:
         logging.error(f"Upload error: {e}")
         return {"status": "error", "message": str(e)}
+
 
 # ─────────────────────────────────────────────
 # ВОПРОСЫ ДЛЯ СБОРА ДАННЫХ (если нет резюме)
@@ -127,8 +133,10 @@ COLLECT_INFO_QUESTIONS = {
 
 COLLECT_INFO_ORDER = ["name", "profession", "experience", "skills", "languages", "email"]
 
+
 def get_collect_question(field: str, lang: str) -> str:
     return COLLECT_INFO_QUESTIONS.get(field, {}).get(lang, COLLECT_INFO_QUESTIONS[field]["ru"])
+
 
 def build_cv_from_collected(collected: dict) -> str:
     """Собирает текст резюме из ответов пользователя."""
@@ -140,6 +148,7 @@ def build_cv_from_collected(collected: dict) -> str:
 Языки: {collected.get('languages', '')}
 Email: {collected.get('email', '')}
 """.strip()
+
 
 @app.websocket("/ws/{session_id}")
 async def websocket_endpoint(websocket: WebSocket, session_id: str):
@@ -215,9 +224,7 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                     })
                     continue
 
-                # Определяем — полное резюме или просто запрос
                 if is_full_cv(cv_text):
-                    # Полное резюме — парсим сразу
                     await update_session(session_id, cv_text=cv_text, step="parsing")
                     await websocket.send_json({
                         "type": "message",
@@ -227,14 +234,12 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                     profile = await parse_cv(cv_text, lang)
                     await _after_parsing(websocket, session_id, lang, profile)
                 else:
-                    # Краткий запрос — собираем данные по одному
                     collected = {"profession": cv_text}
                     await update_session(session_id,
                         cv_text=cv_text,
                         step="collect_info",
                         cv_profile=json.dumps({"_collected": collected, "_collect_index": 0}, ensure_ascii=False)
                     )
-                    # Первый вопрос — имя
                     await websocket.send_json({
                         "type": "message",
                         "sender": "bot",
@@ -247,8 +252,6 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                 collected = profile_data.get("_collected", {})
                 collect_index = profile_data.get("_collect_index", 0)
 
-                # Сохраняем ответ на текущий вопрос
-                # Пропускаем "profession" если уже есть
                 fields_to_ask = [f for f in COLLECT_INFO_ORDER if f != "profession"]
                 current_field = fields_to_ask[collect_index] if collect_index < len(fields_to_ask) else None
 
@@ -260,7 +263,6 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                 profile_data["_collect_index"] = collect_index
                 await update_session(session_id, cv_profile=json.dumps(profile_data, ensure_ascii=False))
 
-                # Следующий вопрос или завершение
                 fields_to_ask = [f for f in COLLECT_INFO_ORDER if f != "profession"]
                 if collect_index < len(fields_to_ask):
                     next_field = fields_to_ask[collect_index]
@@ -270,7 +272,6 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                         "text": get_collect_question(next_field, lang)
                     })
                 else:
-                    # Все данные собраны — строим CV текст и парсим
                     cv_text = build_cv_from_collected(collected)
                     await update_session(session_id, cv_text=cv_text, step="parsing")
 
@@ -290,7 +291,6 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                     })
 
                     profile = await parse_cv(cv_text, lang)
-                    # Добавляем email из собранных данных
                     profile["email"] = collected.get("email", "")
                     await _after_parsing(websocket, session_id, lang, profile)
 
@@ -318,7 +318,30 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                         )
                     })
                 else:
-                    await _ask_location(websocket, session_id, lang, profile)
+                    # ── Все вопросы собраны → запускаем cv_analyst ──
+                    await websocket.send_json({
+                        "type": "message",
+                        "sender": "bot",
+                        "text": get_message(lang, "analyzing")
+                    })
+
+                    qa_pairs = [
+                        {"question": a["q"], "answer": a["a"]}
+                        for a in profile.get("_answers", [])
+                    ]
+
+                    enriched = await analyze_profile(profile, qa_pairs, lang)
+
+                    # Показываем отчёт аналитика
+                    report_text = format_analyst_report(enriched, lang)
+                    if report_text:
+                        await websocket.send_json({
+                            "type": "message",
+                            "sender": "bot",
+                            "text": report_text
+                        })
+
+                    await _ask_location(websocket, session_id, lang, enriched)
 
             # ── Выбор локации ─────────────────────────
             elif step == "ask_location":
@@ -440,6 +463,7 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
         active_connections.pop(session_id, None)
         logging.info(f"WS disconnected: {session_id}")
 
+
 # ─────────────────────────────────────────────
 # HELPERS
 # ─────────────────────────────────────────────
@@ -452,7 +476,6 @@ async def _after_parsing(websocket, session_id, lang, profile):
     hidden = ", ".join(profile.get("hidden_competencies", [])[:2])
     opportunities = ", ".join(profile.get("cross_domain_opportunities", [])[:2])
 
-    # Персонализированное приветствие если есть имя
     if name:
         name_greetings = {
             "ru": f"Приятно познакомиться, {name}! Вот что я нашёл в вашем профиле:",
@@ -500,11 +523,19 @@ async def _after_parsing(websocket, session_id, lang, profile):
             )
         })
     else:
-        await _ask_location(websocket, session_id, lang, profile)
+        # Нет вопросов — сразу аналитик с пустым диалогом
+        enriched = await analyze_profile(profile, [], lang)
+        await _ask_location(websocket, session_id, lang, enriched)
+
 
 async def _ask_location(websocket, session_id, lang, profile):
     location_from_cv = profile.get("location", "")
-    await update_session(session_id, step="ask_location")
+
+    # Сохраняем обогащённый профиль перед переходом к локации
+    await update_session(session_id,
+        cv_profile=json.dumps(profile, ensure_ascii=False),
+        step="ask_location"
+    )
 
     location_prompts = {
         "ru": f"📍 Где вы ищете работу?\n\nВ резюме указано: {location_from_cv or 'не указано'}\n\nПодтвердите город или введите другой:",
@@ -526,6 +557,7 @@ async def _ask_location(websocket, session_id, lang, profile):
         "text": location_prompts.get(lang, location_prompts["ru"]),
         "buttons": buttons
     })
+
 
 async def _do_job_search(websocket, session_id, lang, profile):
     companies = await find_companies_for_profile(profile)
@@ -556,6 +588,7 @@ async def _do_job_search(websocket, session_id, lang, profile):
         )
     })
 
+
 async def _process_next_company(websocket, session_id, lang, selected, idx):
     if idx >= len(selected):
         await websocket.send_json({
@@ -568,7 +601,6 @@ async def _process_next_company(websocket, session_id, lang, selected, idx):
 
     company = selected[idx]
     session = await get_session(session_id)
-    cv_text = session.get("cv_text", "")
     profile = json.loads(session.get("cv_profile") or "{}")
 
     await websocket.send_json({
@@ -577,7 +609,13 @@ async def _process_next_company(websocket, session_id, lang, selected, idx):
         "text": get_message(lang, "adapting", company=company["name"])
     })
 
-    adapted = await adapt_cv(cv_text, profile, company, lang)
+    # Новая сигнатура: adapt_cv(profile, company, job, lang)
+    best_job = None
+    jobs = company.get("jobs", [])
+    if jobs:
+        best_job = max(jobs, key=lambda j: j.get("match_score", 0))
+
+    adapted = await adapt_cv(profile, company, best_job, lang)
 
     await websocket.send_json({
         "type": "message",
@@ -587,7 +625,8 @@ async def _process_next_company(websocket, session_id, lang, selected, idx):
 
     email_data = await write_email(profile, adapted, company, lang)
 
-    company["_lebenslauf_de"] = adapted.get("lebenslauf_de", "")
+    # Сохраняем данные письма в компанию
+    company["_lebenslauf_de"] = adapted.get("professional_summary_de", "")
     company["_anschreiben_de"] = email_data.get("anschreiben_de", "")
     company["_subject"] = email_data.get("email_subject", "")
     selected[idx] = company
@@ -599,7 +638,7 @@ async def _process_next_company(websocket, session_id, lang, selected, idx):
 
     preview_de = email_data.get("anschreiben_de", "")[:500] + "..."
     preview_user = email_data.get("anschreiben_user", "")[:500] + "..."
-    lebenslauf_preview = adapted.get("lebenslauf_de", "")[:300] + "..."
+    lebenslauf_preview = adapted.get("professional_summary_de", "")[:300] + "..."
 
     await websocket.send_json({
         "type": "message",
@@ -619,6 +658,7 @@ async def _process_next_company(websocket, session_id, lang, selected, idx):
             ["هو", "نه", "سمول"]
         )
     })
+
 
 async def _next_or_done(websocket, session_id, lang, selected, current_idx):
     next_idx = current_idx + 1
@@ -642,10 +682,12 @@ async def _next_or_done(websocket, session_id, lang, selected, current_idx):
         })
         await update_session(session_id, step="done")
 
+
 # ─────────────────────────────────────────────
 # STATIC FILES
 # ─────────────────────────────────────────────
 app.mount("/static", StaticFiles(directory="static"), name="static")
+
 
 @app.get("/")
 async def root():
