@@ -2,6 +2,7 @@ import os
 import uuid
 import json
 import logging
+import asyncio
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File, Form
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse
@@ -21,6 +22,30 @@ logging.basicConfig(level=logging.INFO)
 app = FastAPI()
 
 active_connections: dict = {}
+
+
+# ─────────────────────────────────────────────
+# KEEPALIVE — шлёт typing каждые 5с пока LLM думает
+# ─────────────────────────────────────────────
+async def keep_alive(websocket, coro):
+    """
+    Запускает корутину и параллельно шлёт {"type":"typing"} каждые 5 секунд.
+    Предотвращает Railway proxy timeout при долгих вызовах LLM.
+    """
+    async def ping_loop():
+        while True:
+            await asyncio.sleep(5)
+            try:
+                await websocket.send_json({"type": "typing"})
+            except Exception:
+                break
+
+    ping_task = asyncio.create_task(ping_loop())
+    try:
+        result = await coro
+    finally:
+        ping_task.cancel()
+    return result
 
 
 @app.on_event("startup")
@@ -231,7 +256,7 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                         "sender": "bot",
                         "text": get_message(lang, "parsing")
                     })
-                    profile = await parse_cv(cv_text, lang)
+                    profile = await keep_alive(websocket, parse_cv(cv_text, lang))
                     await _after_parsing(websocket, session_id, lang, profile)
                 else:
                     collected = {"profession": cv_text}
@@ -290,7 +315,7 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                         "text": greeting.get(lang, greeting["ru"])
                     })
 
-                    profile = await parse_cv(cv_text, lang)
+                    profile = await keep_alive(websocket, parse_cv(cv_text, lang))
                     profile["email"] = collected.get("email", "")
                     await _after_parsing(websocket, session_id, lang, profile)
 
@@ -330,7 +355,7 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                         for a in profile.get("_answers", [])
                     ]
 
-                    enriched = await analyze_profile(profile, qa_pairs, lang)
+                    enriched = await keep_alive(websocket, analyze_profile(profile, qa_pairs, lang))
 
                     # Показываем отчёт аналитика
                     report_text = format_analyst_report(enriched, lang)
@@ -560,7 +585,7 @@ async def _ask_location(websocket, session_id, lang, profile):
 
 
 async def _do_job_search(websocket, session_id, lang, profile):
-    companies = await find_companies_for_profile(profile)
+    companies = await keep_alive(websocket, find_companies_for_profile(profile))
 
     if not companies:
         await websocket.send_json({
@@ -615,7 +640,7 @@ async def _process_next_company(websocket, session_id, lang, selected, idx):
     if jobs:
         best_job = max(jobs, key=lambda j: j.get("match_score", 0))
 
-    adapted = await adapt_cv(profile, company, best_job, lang)
+    adapted = await keep_alive(websocket, adapt_cv(profile, company, best_job, lang))
 
     await websocket.send_json({
         "type": "message",
@@ -623,7 +648,7 @@ async def _process_next_company(websocket, session_id, lang, selected, idx):
         "text": get_message(lang, "writing_email", company=company["name"])
     })
 
-    email_data = await write_email(profile, adapted, company, lang)
+    email_data = await keep_alive(websocket, write_email(profile, adapted, company, lang))
 
     # Сохраняем данные письма в компанию
     company["_lebenslauf_de"] = adapted.get("professional_summary_de", "")
