@@ -204,6 +204,11 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
     try:
         while True:
             data = await websocket.receive_json()
+
+            # Игнорируем ping от фронтенда — не обрабатываем как сообщение
+            if data.get("type") == "ping":
+                continue
+
             session = await get_session(session_id)
             step = session.get("step", "lang")
             lang = session.get("lang", "ru")
