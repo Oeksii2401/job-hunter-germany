@@ -21,17 +21,15 @@ from prompts.prompts import get_message
 
 logging.basicConfig(level=logging.INFO)
 
-groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
-
 app = FastAPI()
 
 active_connections: dict = {}
 
+groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 
-# ─────────────────────────────────────────────
-# KEEPALIVE — шлёт typing каждые 5с пока LLM думает
-# ─────────────────────────────────────────────
+
 async def keep_alive(websocket, coro):
+    """Шлёт typing каждые 5с пока LLM думает — предотвращает Railway proxy timeout."""
     async def ping_loop():
         while True:
             await asyncio.sleep(5)
@@ -39,7 +37,6 @@ async def keep_alive(websocket, coro):
                 await websocket.send_json({"type": "typing"})
             except Exception:
                 break
-
     ping_task = asyncio.create_task(ping_loop())
     try:
         result = await coro
@@ -164,6 +161,7 @@ def get_collect_question(field: str, lang: str) -> str:
 
 
 def build_cv_from_collected(collected: dict) -> str:
+    """Собирает текст резюме из ответов пользователя."""
     return f"""
 Имя: {collected.get('name', '')}
 Профессия: {collected.get('profession', '')}
@@ -180,7 +178,6 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
     active_connections[session_id] = websocket
     logging.info(f"WS connected: {session_id}")
 
-    # ── Инициализация сессии с защитой от ошибки БД ──
     try:
         session = await get_session(session_id)
         lang = session.get("lang", "ru")
@@ -210,7 +207,7 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
         while True:
             data = await websocket.receive_json()
 
-            # Игнорируем ping от фронтенда
+            # Игнорируем ping от фронтенда — не обрабатываем как сообщение пользователя
             if data.get("type") == "ping":
                 continue
 
@@ -353,6 +350,7 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                         )
                     })
                 else:
+                    # ── Все вопросы собраны → запускаем cv_analyst ──
                     await websocket.send_json({
                         "type": "message",
                         "sender": "bot",
@@ -371,6 +369,7 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                         logging.error(f"analyze_profile FAILED: {e}", exc_info=True)
                         enriched = profile
 
+                    # Показываем отчёт аналитика
                     report_text = format_analyst_report(enriched, lang)
                     if report_text:
                         await websocket.send_json({
@@ -417,7 +416,6 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
 Если описывает предпочтения — выбери подходящие номера.
 
 Верни ТОЛЬКО JSON массив номеров (1-based): [1, 3] или []"""
-
                     try:
                         loop = asyncio.get_event_loop()
                         interp = await loop.run_in_executor(None, lambda: groq_client.chat.completions.create(
@@ -438,8 +436,7 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                                       "not suitable", "nothing", "andere", "keine", "нічого"]
                     if any(w in text.lower() for w in no_match_words):
                         await websocket.send_json({
-                            "type": "message",
-                            "sender": "bot",
+                            "type": "message", "sender": "bot",
                             "text": {
                                 "ru": "Понял. Напиши в каком направлении искать — изменю запрос и найду другие компании.",
                                 "de": "Verstanden. Schreib mir, in welche Richtung ich suchen soll.",
@@ -452,8 +449,7 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                         await update_session(session_id, step="ask_location")
                     else:
                         await websocket.send_json({
-                            "type": "message",
-                            "sender": "bot",
+                            "type": "message", "sender": "bot",
                             "text": {
                                 "ru": "Напиши номера компаний (например: 1, 3) или скажи что ничего не подходит.",
                                 "de": "Schreib die Nummern (z.B.: 1, 3) oder sag, dass nichts passt.",
@@ -470,6 +466,178 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                     step="adapt_cv"
                 )
                 await _process_next_company(websocket, session_id, lang, selected, 0)
+
+            # ── Согласование адаптированного CV ──────
+            elif step.startswith("review_cv_"):
+                idx = int(step.split("_")[2])
+                selected = json.loads(session.get("selected_companies") or "[]")
+                company = selected[idx]
+                profile = json.loads(session.get("cv_profile") or "{}")
+                adapted = company.get("_adapted", {})
+
+                yes_words = ["да", "yes", "ja", "так", "هو", "نعم", "верно", "correct",
+                             "stimmt", "вірно", "правильно", "ок", "ok", "okay"]
+                no_words = ["нет", "no", "nein", "ні", "لا", "نه", "поправить",
+                            "fix", "korrigieren", "виправити", "تعديل", "сомол"]
+
+                if any(w in text.lower() for w in no_words):
+                    # Пользователь хочет поправить — спрашиваем что именно
+                    await websocket.send_json({
+                        "type": "message",
+                        "sender": "bot",
+                        "text": {
+                            "ru": "Напиши что именно нужно поправить в резюме (например: уровень языка, должность, навыки):",
+                            "de": "Schreib was im Lebenslauf korrigiert werden soll:",
+                            "en": "Write what needs to be fixed in the CV:",
+                            "uk": "Напиши що саме потрібно виправити в резюме:",
+                            "ar": "اكتب ما يجب تصحيحه في السيرة الذاتية:",
+                            "ps": "ولیکئ چې CV کې څه سم کړئ:",
+                        }.get(lang, "Напиши что нужно поправить:")
+                    })
+                    await update_session(session_id, step=f"fix_cv_{idx}")
+
+                elif any(w in text.lower() for w in yes_words):
+                    # CV согласован — пишем письмо
+                    await websocket.send_json({
+                        "type": "message",
+                        "sender": "bot",
+                        "text": {
+                            "ru": f"Отлично! Пишу сопроводительное письмо для {company['name']}...",
+                            "de": f"Sehr gut! Ich schreibe das Anschreiben für {company['name']}...",
+                            "en": f"Great! Writing cover letter for {company['name']}...",
+                            "uk": f"Чудово! Пишу супровідний лист для {company['name']}...",
+                            "ar": f"رائع! أكتب رسالة التغطية لـ {company['name']}...",
+                            "ps": f"ښه! د {company['name']} لپاره لیک لیکم...",
+                        }.get(lang, f"Пишу письмо для {company['name']}...")
+                    })
+                    email_data = await keep_alive(websocket, write_email(profile, adapted, company, lang))
+
+                    company["_anschreiben_de"] = email_data.get("anschreiben_de", "")
+                    company["_subject"] = email_data.get("email_subject", "")
+                    selected[idx] = company
+
+                    await update_session(session_id,
+                        selected_companies=json.dumps(selected, ensure_ascii=False),
+                        step=f"review_{idx}"
+                    )
+
+                    preview_de = email_data.get("anschreiben_de", "")[:600] + "..."
+                    preview_user = email_data.get("anschreiben_user", "")[:600] + "..."
+
+                    await websocket.send_json({
+                        "type": "message",
+                        "sender": "bot",
+                        "text": get_message(lang, "review_letter",
+                            company=company["name"],
+                            lebenslauf_de=company.get("_lebenslauf_de", "")[:300] + "...",
+                            anschreiben_de=preview_de,
+                            anschreiben_user=preview_user
+                        ),
+                        "buttons": (
+                            ["да, отправить", "нет", "поправить"] if lang == "ru" else
+                            ["yes, send", "no", "edit"] if lang == "en" else
+                            ["ja, senden", "nein", "korrigieren"] if lang == "de" else
+                            ["так, надіслати", "ні", "виправити"] if lang == "uk" else
+                            ["نعم، أرسل", "لا", "تعديل"] if lang == "ar" else
+                            ["هو، ولیږه", "نه", "سمول"]
+                        )
+                    })
+                else:
+                    # Непонятный ответ — уточняем
+                    await websocket.send_json({
+                        "type": "message",
+                        "sender": "bot",
+                        "text": {
+                            "ru": "Резюме выглядит правильно? Нажми 'да, всё верно' или напиши что поправить.",
+                            "de": "Ist der Lebenslauf korrekt? Drück 'ja, stimmt' oder schreib was zu korrigieren ist.",
+                            "en": "Does the CV look correct? Press 'yes, correct' or write what to fix.",
+                            "uk": "Резюме виглядає правильно? Натисни 'так' або напиши що виправити.",
+                            "ar": "هل السيرة الذاتية صحيحة؟",
+                            "ps": "آیا CV سم دی؟",
+                        }.get(lang, "Резюме правильно?"),
+                        "buttons": (
+                            ["да, всё верно", "нет, поправить"] if lang == "ru" else
+                            ["yes, correct", "no, fix it"] if lang == "en" else
+                            ["ja, stimmt", "nein, korrigieren"] if lang == "de" else
+                            ["так, все вірно", "ні, виправити"] if lang == "uk" else
+                            ["نعم، صحيح", "لا، تعديل"] if lang == "ar" else
+                            ["هو، سم دی", "نه، سمول"]
+                        )
+                    })
+
+            # ── Правка CV по комментарию пользователя ─
+            elif step.startswith("fix_cv_"):
+                idx = int(step.split("_")[2])
+                selected = json.loads(session.get("selected_companies") or "[]")
+                company = selected[idx]
+                profile = json.loads(session.get("cv_profile") or "{}")
+                adapted = company.get("_adapted", {})
+
+                await websocket.send_json({
+                    "type": "message",
+                    "sender": "bot",
+                    "text": {
+                        "ru": "Исправляю резюме...",
+                        "de": "Ich korrigiere den Lebenslauf...",
+                        "en": "Fixing the CV...",
+                        "uk": "Виправляю резюме...",
+                        "ar": "أصحح السيرة الذاتية...",
+                        "ps": "CV سمول...",
+                    }.get(lang, "Исправляю...")
+                })
+
+                # Добавляем комментарий пользователя в профиль и переадаптируем
+                fix_note = f"ПРАВКА ОТ КАНДИДАТА: {text}"
+                profile["_fix_note"] = fix_note
+                best_job = company.get("_adapted", {}).get("job")
+
+                adapted = await keep_alive(websocket, adapt_cv(profile, company, best_job, lang))
+                company["_adapted"] = adapted
+                company["_lebenslauf_de"] = adapted.get("professional_summary_de", "")
+                selected[idx] = company
+
+                await update_session(session_id,
+                    selected_companies=json.dumps(selected, ensure_ascii=False),
+                    step=f"review_cv_{idx}"
+                )
+
+                # Показываем исправленное резюме
+                summary_user = adapted.get("professional_summary_candidate_lang", "")
+                summary_de = adapted.get("professional_summary_de", "")
+                lang_section = adapted.get("language_section", {})
+
+                fix_preview = f"✏️ **Исправленное резюме:**\n\n"
+                if summary_user:
+                    fix_preview += f"📋 {summary_user}\n\n"
+                if summary_de:
+                    fix_preview += f"🇩🇪 {summary_de}\n\n"
+                if lang_section.get("german"):
+                    fix_preview += f"🗣️ {lang_section['german']}\n"
+                if lang_section.get("english"):
+                    fix_preview += f"🗣️ {lang_section['english']}\n"
+
+                fix_preview += {
+                    "ru": "\n✅ Теперь всё верно?",
+                    "de": "\n✅ Ist es jetzt korrekt?",
+                    "en": "\n✅ Is it correct now?",
+                    "uk": "\n✅ Тепер все вірно?",
+                    "ar": "\n✅ هل هو صحيح الآن؟",
+                    "ps": "\n✅ اوس سم دی؟",
+                }.get(lang, "\n✅ Теперь всё верно?")
+
+                await websocket.send_json({
+                    "type": "message",
+                    "sender": "bot",
+                    "text": fix_preview,
+                    "buttons": (
+                        ["да, всё верно", "нет, поправить ещё"] if lang == "ru" else
+                        ["yes, correct", "no, fix more"] if lang == "en" else
+                        ["ja, stimmt", "nein, weiter korrigieren"] if lang == "de" else
+                        ["так, все вірно", "ні, ще виправити"] if lang == "uk" else
+                        ["نعم، صحيح", "لا، تعديل"] if lang == "ar" else
+                        ["هو، سم دی", "نه، سمول"]
+                    )
+                })
 
             # ── Подтверждение письма ──────────────────
             elif step.startswith("review_"):
@@ -517,7 +685,8 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                     company_name=company["name"],
                     subject=company.get("_subject", f"Bewerbung — {profile.get('name', '')}"),
                     anschreiben=company.get("_anschreiben_de", ""),
-                    lebenslauf=company.get("_lebenslauf_de", "")
+                    lebenslauf=company.get("_lebenslauf_de", ""),
+                    candidate_email=profile.get("email", "")  # Reply-To: ответы компании идут кандидату
                 )
 
                 if ok:
@@ -558,6 +727,7 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
 # HELPERS
 # ─────────────────────────────────────────────
 async def _after_parsing(websocket, session_id, lang, profile):
+    """Вызывается после парсинга CV — показывает результат и задаёт вопросы."""
     profile_json = json.dumps(profile, ensure_ascii=False)
     await update_session(session_id, cv_profile=profile_json, step="questions")
 
@@ -582,7 +752,11 @@ async def _after_parsing(websocket, session_id, lang, profile):
             opportunities=opportunities or "—"
         )
 
-    await websocket.send_json({"type": "message", "sender": "bot", "text": intro})
+    await websocket.send_json({
+        "type": "message",
+        "sender": "bot",
+        "text": intro
+    })
 
     if name:
         await websocket.send_json({
@@ -608,10 +782,11 @@ async def _after_parsing(websocket, session_id, lang, profile):
             )
         })
     else:
+        # Нет вопросов — сразу аналитик с пустым диалогом
         try:
             enriched = await keep_alive(websocket, analyze_profile(profile, [], lang))
         except Exception as e:
-            logging.error(f"analyze_profile (no questions) FAILED: {e}", exc_info=True)
+            logging.error(f"analyze_profile FAILED: {e}", exc_info=True)
             enriched = profile
         await _ask_location(websocket, session_id, lang, enriched)
 
@@ -619,6 +794,7 @@ async def _after_parsing(websocket, session_id, lang, profile):
 async def _ask_location(websocket, session_id, lang, profile):
     location_from_cv = profile.get("location", "")
 
+    # Сохраняем обогащённый профиль перед переходом к локации
     await update_session(session_id,
         cv_profile=json.dumps(profile, ensure_ascii=False),
         step="ask_location"
@@ -696,6 +872,7 @@ async def _process_next_company(websocket, session_id, lang, selected, idx):
         "text": get_message(lang, "adapting", company=company["name"])
     })
 
+    # Новая сигнатура: adapt_cv(profile, company, job, lang)
     best_job = None
     jobs = company.get("jobs", [])
     if jobs:
@@ -703,44 +880,94 @@ async def _process_next_company(websocket, session_id, lang, selected, idx):
 
     adapted = await keep_alive(websocket, adapt_cv(profile, company, best_job, lang))
 
-    await websocket.send_json({
-        "type": "message",
-        "sender": "bot",
-        "text": get_message(lang, "writing_email", company=company["name"])
-    })
-
-    email_data = await keep_alive(websocket, write_email(profile, adapted, company, lang))
-
+    # Сохраняем адаптированное CV в компанию в компанию для следующего шага
+    company["_adapted"] = adapted
     company["_lebenslauf_de"] = adapted.get("professional_summary_de", "")
-    company["_anschreiben_de"] = email_data.get("anschreiben_de", "")
-    company["_subject"] = email_data.get("email_subject", "")
     selected[idx] = company
 
     await update_session(session_id,
         selected_companies=json.dumps(selected, ensure_ascii=False),
-        step=f"review_{idx}"
+        step=f"review_cv_{idx}"
     )
 
-    preview_de = email_data.get("anschreiben_de", "")[:500] + "..."
-    preview_user = email_data.get("anschreiben_user", "")[:500] + "..."
-    lebenslauf_preview = adapted.get("professional_summary_de", "")[:300] + "..."
+    # ── Показываем адаптированное резюме пользователю для согласования ──
+    lang_section = adapted.get("language_section", {})
+    personal = adapted.get("personal_data_de", {})
+    skills = adapted.get("key_skills_adapted", [])
+    ats_filters = adapted.get("ats_filters_closed", [])
+    summary_user = adapted.get("professional_summary_candidate_lang", "")
+    summary_de = adapted.get("professional_summary_de", "")
+    job_title = adapted.get("job_title_target", "")
+    notes = adapted.get("adaptation_notes", "")
+
+    cv_preview_lines = []
+    cv_preview_lines.append(f"📄 **Адаптированное резюме под: {company['name']}**")
+    if job_title:
+        cv_preview_lines.append(f"🎯 Целевая должность: **{job_title}**\n")
+
+    if summary_user:
+        cv_preview_lines.append(f"📋 **Профессиональный профиль ({['на вашем языке', 'auf Ihrer Sprache', 'in your language', 'вашою мовою', 'بلغتك', 'پخپله ژبه'][['ru','de','en','uk','ar','ps'].index(lang) if lang in ['ru','de','en','uk','ar','ps'] else 0]}):**\n{summary_user}\n")
+
+    if summary_de:
+        cv_preview_lines.append(f"🇩🇪 **Профессиональный профиль (немецкий — для ATS):**\n{summary_de}\n")
+
+    if lang_section:
+        cv_preview_lines.append("🗣️ **Языки:**")
+        if lang_section.get("german"):
+            cv_preview_lines.append(f"  • {lang_section['german']}")
+        if lang_section.get("english"):
+            cv_preview_lines.append(f"  • {lang_section['english']}")
+        for other in lang_section.get("other", []):
+            cv_preview_lines.append(f"  • {other}")
+        cv_preview_lines.append("")
+
+    if personal:
+        cv_preview_lines.append("📍 **Личные данные:**")
+        if personal.get("location"):
+            cv_preview_lines.append(f"  • Wohnort: {personal['location']}")
+        if personal.get("work_permit"):
+            cv_preview_lines.append(f"  • Arbeitserlaubnis: {personal['work_permit']}")
+        if personal.get("availability"):
+            cv_preview_lines.append(f"  • Verfügbarkeit: {personal['availability']}")
+        cv_preview_lines.append("")
+
+    if skills:
+        cv_preview_lines.append("🛠️ **Ключевые навыки:**")
+        for s in skills[:6]:
+            cv_preview_lines.append(f"  • {s}")
+        cv_preview_lines.append("")
+
+    if ats_filters:
+        cv_preview_lines.append(f"🛡️ **Закрытые ATS-фильтры:**")
+        for f in ats_filters:
+            cv_preview_lines.append(f"  ✅ {f}")
+        cv_preview_lines.append("")
+
+    if notes:
+        cv_preview_lines.append(f"ℹ️ {notes}\n")
+
+    approve_question = {
+        "ru": "\n✅ Резюме выглядит правильно? Если да — напишу письмо. Если нет — скажи что поправить.",
+        "de": "\n✅ Sieht der Lebenslauf richtig aus? Wenn ja — schreibe ich das Anschreiben. Wenn nein — sag mir was zu korrigieren ist.",
+        "en": "\n✅ Does the CV look correct? If yes — I'll write the cover letter. If no — tell me what to fix.",
+        "uk": "\n✅ Резюме виглядає правильно? Якщо так — напишу листа. Якщо ні — скажи що виправити.",
+        "ar": "\n✅ هل تبدو السيرة الذاتية صحيحة؟ إذا نعم — سأكتب رسالة التغطية.",
+        "ps": "\n✅ آیا CV سم ښکاري؟ که هو — لیک به ولیکم.",
+    }.get(lang, "\n✅ Резюме выглядит правильно?")
+
+    cv_preview_lines.append(approve_question)
 
     await websocket.send_json({
         "type": "message",
         "sender": "bot",
-        "text": get_message(lang, "review_letter",
-            company=company["name"],
-            lebenslauf_de=lebenslauf_preview,
-            anschreiben_de=preview_de,
-            anschreiben_user=preview_user
-        ),
+        "text": "\n".join(cv_preview_lines),
         "buttons": (
-            ["да", "нет", "поправить"] if lang == "ru" else
-            ["yes", "no", "edit"] if lang == "en" else
-            ["ja", "nein", "korrigieren"] if lang == "de" else
-            ["так", "ні", "виправити"] if lang == "uk" else
-            ["نعم", "لا", "تعديل"] if lang == "ar" else
-            ["هو", "نه", "سمول"]
+            ["да, всё верно", "нет, поправить"] if lang == "ru" else
+            ["yes, correct", "no, fix it"] if lang == "en" else
+            ["ja, stimmt", "nein, korrigieren"] if lang == "de" else
+            ["так, все вірно", "ні, виправити"] if lang == "uk" else
+            ["نعم، صحيح", "لا، تعديل"] if lang == "ar" else
+            ["هو، سم دی", "نه، سمول"]
         )
     })
 

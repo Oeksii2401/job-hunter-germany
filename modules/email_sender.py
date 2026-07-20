@@ -12,10 +12,12 @@ async def send_email(
     subject: str,
     body: str,
     html_body: str = None,
-    from_name: str = FROM_NAME
+    from_name: str = FROM_NAME,
+    reply_to: str = None
 ) -> bool:
-    """Отправляет письмо через SendGrid API.
-    Если передан html_body — отправляет обе версии (plain + HTML).
+    """
+    Отправляет письмо через SendGrid API.
+    reply_to — email кандидата: ответы компании придут напрямую ему.
     """
     url = "https://api.sendgrid.com/v3/mail/send"
     headers = {
@@ -34,11 +36,17 @@ async def send_email(
         "content": content
     }
 
+    # Reply-To — ключевой момент:
+    # письмо уходит с нашего verified sender,
+    # но когда HR нажимает "Ответить" — ответ идёт на email кандидата
+    if reply_to:
+        payload["reply_to"] = {"email": reply_to}
+
     try:
         async with httpx.AsyncClient() as client:
             resp = await client.post(url, headers=headers, json=payload, timeout=15)
             if resp.status_code in (200, 202):
-                logging.info(f"Email sent to {to_email} | subject: {subject}")
+                logging.info(f"Email sent to {to_email} | reply_to: {reply_to} | subject: {subject}")
                 return True
             else:
                 logging.error(f"SendGrid error {resp.status_code}: {resp.text}")
@@ -49,7 +57,7 @@ async def send_email(
 
 
 def _build_html(anschreiben: str, lebenslauf: str, candidate_name: str) -> str:
-    """Формирует HTML версию письма — читается лучше ATS системами."""
+    """HTML версия письма — лучше читается ATS системами."""
     anschreiben_html = anschreiben.replace("\n", "<br>")
     lebenslauf_html = lebenslauf.replace("\n", "<br>")
     return f"""<!DOCTYPE html>
@@ -76,9 +84,13 @@ async def send_application(
     company_name: str,
     subject: str,
     anschreiben: str,
-    lebenslauf: str
+    lebenslauf: str,
+    candidate_email: str = None
 ) -> bool:
-    """Отправляет заявку: Anschreiben + Lebenslauf."""
+    """
+    Отправляет заявку: Anschreiben + Lebenslauf.
+    candidate_email — куда придут ответы компании (Reply-To).
+    """
     plain_body = f"""{anschreiben}
 
 ---
@@ -97,7 +109,8 @@ Mit freundlichen Grüßen,
         subject=subject,
         body=plain_body,
         html_body=html_body,
-        from_name=candidate_name
+        from_name=candidate_name,
+        reply_to=candidate_email
     )
 
 
@@ -106,12 +119,14 @@ async def send_followup(
     candidate_name: str,
     company_name: str,
     subject: str,
-    followup_text: str
+    followup_text: str,
+    candidate_email: str = None
 ) -> bool:
     """Отправляет follow-up письмо."""
     return await send_email(
         to_email=to_email,
         subject=subject,
         body=followup_text,
-        from_name=candidate_name
+        from_name=candidate_name,
+        reply_to=candidate_email
     )
