@@ -3,6 +3,8 @@ import uuid
 import json
 import logging
 import asyncio
+import re
+from groq import Groq
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File, Form
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse
@@ -19,6 +21,8 @@ from prompts.prompts import get_message
 
 logging.basicConfig(level=logging.INFO)
 
+groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
+
 app = FastAPI()
 
 active_connections: dict = {}
@@ -28,10 +32,6 @@ active_connections: dict = {}
 # KEEPALIVE — шлёт typing каждые 5с пока LLM думает
 # ─────────────────────────────────────────────
 async def keep_alive(websocket, coro):
-    """
-    Запускает корутину и параллельно шлёт {"type":"typing"} каждые 5 секунд.
-    Предотвращает Railway proxy timeout при долгих вызовах LLM.
-    """
     async def ping_loop():
         while True:
             await asyncio.sleep(5)
@@ -164,7 +164,6 @@ def get_collect_question(field: str, lang: str) -> str:
 
 
 def build_cv_from_collected(collected: dict) -> str:
-    """Собирает текст резюме из ответов пользователя."""
     return f"""
 Имя: {collected.get('name', '')}
 Профессия: {collected.get('profession', '')}
@@ -181,8 +180,14 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
     active_connections[session_id] = websocket
     logging.info(f"WS connected: {session_id}")
 
-    session = await get_session(session_id)
-    lang = session.get("lang", "ru")
+    # ── Инициализация сессии с защитой от ошибки БД ──
+    try:
+        session = await get_session(session_id)
+        lang = session.get("lang", "ru")
+    except Exception as e:
+        logging.error(f"get_session failed on connect: {e}", exc_info=True)
+        session = {}
+        lang = "ru"
 
     await websocket.send_json({
         "type": "message",
@@ -205,7 +210,7 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
         while True:
             data = await websocket.receive_json()
 
-            # Игнорируем ping от фронтенда — не обрабатываем как сообщение
+            # Игнорируем ping от фронтенда
             if data.get("type") == "ping":
                 continue
 
@@ -348,7 +353,6 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                         )
                     })
                 else:
-                    # ── Все вопросы собраны → запускаем cv_analyst ──
                     await websocket.send_json({
                         "type": "message",
                         "sender": "bot",
@@ -360,9 +364,13 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                         for a in profile.get("_answers", [])
                     ]
 
-                    enriched = await keep_alive(websocket, analyze_profile(profile, qa_pairs, lang))
+                    try:
+                        enriched = await keep_alive(websocket, analyze_profile(profile, qa_pairs, lang))
+                        logging.info(f"analyze_profile OK: {session_id}")
+                    except Exception as e:
+                        logging.error(f"analyze_profile FAILED: {e}", exc_info=True)
+                        enriched = profile
 
-                    # Показываем отчёт аналитика
                     report_text = format_analyst_report(enriched, lang)
                     if report_text:
                         await websocket.send_json({
@@ -391,18 +399,70 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
             # ── Выбор компаний ────────────────────────
             elif step == "select_companies":
                 companies = json.loads(session.get("companies") or "[]")
-                try:
-                    selected_nums = [int(n.strip()) - 1 for n in text.split(",") if n.strip().isdigit()]
-                    selected = [companies[i] for i in selected_nums if 0 <= i < len(companies)]
-                except Exception:
-                    selected = []
 
+                # Уровень 1 — прямые цифры
+                selected_nums = [int(n.strip()) - 1 for n in text.split(",") if n.strip().isdigit()]
+                selected = [companies[i] for i in selected_nums if 0 <= i < len(companies)]
+
+                # Уровень 2 — свободный текст → LLM интерпретирует
+                if not selected and text.strip():
+                    company_names = [f"{i+1}. {c['name']}" for i, c in enumerate(companies)]
+                    interpret_prompt = f"""Пользователь видит список компаний и написал: "{text}"
+
+Список компаний:
+{chr(10).join(company_names)}
+
+Определи какие компании хочет выбрать пользователь.
+Если пользователь говорит что ничего не подходит — верни [].
+Если описывает предпочтения — выбери подходящие номера.
+
+Верни ТОЛЬКО JSON массив номеров (1-based): [1, 3] или []"""
+
+                    try:
+                        loop = asyncio.get_event_loop()
+                        interp = await loop.run_in_executor(None, lambda: groq_client.chat.completions.create(
+                            model="llama-3.3-70b-versatile",
+                            messages=[{"role": "user", "content": interpret_prompt}],
+                            max_tokens=100,
+                        ).choices[0].message.content.strip())
+                        interp = re.sub(r"```.*?```", "", interp, flags=re.DOTALL).strip()
+                        nums = json.loads(interp)
+                        selected = [companies[n-1] for n in nums if isinstance(n, int) and 1 <= n <= len(companies)]
+                    except Exception as e:
+                        logging.warning(f"LLM company interpret error: {e}")
+                        selected = []
+
+                # Уровень 3 — ничего не подошло
                 if not selected:
-                    await websocket.send_json({
-                        "type": "message",
-                        "sender": "bot",
-                        "text": "Введи номера компаний через запятую (например: 1, 3)"
-                    })
+                    no_match_words = ["не подходит", "ничего", "нет", "другие", "поменять",
+                                      "not suitable", "nothing", "andere", "keine", "нічого"]
+                    if any(w in text.lower() for w in no_match_words):
+                        await websocket.send_json({
+                            "type": "message",
+                            "sender": "bot",
+                            "text": {
+                                "ru": "Понял. Напиши в каком направлении искать — изменю запрос и найду другие компании.",
+                                "de": "Verstanden. Schreib mir, in welche Richtung ich suchen soll.",
+                                "en": "Got it. Tell me what direction to search — I'll find other companies.",
+                                "uk": "Зрозумів. Напиши в якому напрямку шукати.",
+                                "ar": "حسناً. أخبرني في أي اتجاه تبحث.",
+                                "ps": "پوه شوم. ولیکئ چې کوم لور ته لټون وکړم.",
+                            }.get(lang, "Понял. Напиши в каком направлении искать.")
+                        })
+                        await update_session(session_id, step="ask_location")
+                    else:
+                        await websocket.send_json({
+                            "type": "message",
+                            "sender": "bot",
+                            "text": {
+                                "ru": "Напиши номера компаний (например: 1, 3) или скажи что ничего не подходит.",
+                                "de": "Schreib die Nummern (z.B.: 1, 3) oder sag, dass nichts passt.",
+                                "en": "Write company numbers (e.g.: 1, 3) or say nothing fits.",
+                                "uk": "Напиши номери (наприклад: 1, 3) або скажи що нічого не підходить.",
+                                "ar": "اكتب أرقام الشركات (مثال: 1، 3) أو قل إنه لا يناسبك.",
+                                "ps": "شمیرې ولیکئ (لکه: 1، 3) یا ووایئ چې هیڅ مناسب نه دی.",
+                            }.get(lang, "Напиши номера компаний или скажи что ничего не подходит.")
+                        })
                     continue
 
                 await update_session(session_id,
@@ -498,7 +558,6 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
 # HELPERS
 # ─────────────────────────────────────────────
 async def _after_parsing(websocket, session_id, lang, profile):
-    """Вызывается после парсинга CV — показывает результат и задаёт вопросы."""
     profile_json = json.dumps(profile, ensure_ascii=False)
     await update_session(session_id, cv_profile=profile_json, step="questions")
 
@@ -523,11 +582,7 @@ async def _after_parsing(websocket, session_id, lang, profile):
             opportunities=opportunities or "—"
         )
 
-    await websocket.send_json({
-        "type": "message",
-        "sender": "bot",
-        "text": intro
-    })
+    await websocket.send_json({"type": "message", "sender": "bot", "text": intro})
 
     if name:
         await websocket.send_json({
@@ -553,15 +608,17 @@ async def _after_parsing(websocket, session_id, lang, profile):
             )
         })
     else:
-        # Нет вопросов — сразу аналитик с пустым диалогом
-        enriched = await analyze_profile(profile, [], lang)
+        try:
+            enriched = await keep_alive(websocket, analyze_profile(profile, [], lang))
+        except Exception as e:
+            logging.error(f"analyze_profile (no questions) FAILED: {e}", exc_info=True)
+            enriched = profile
         await _ask_location(websocket, session_id, lang, enriched)
 
 
 async def _ask_location(websocket, session_id, lang, profile):
     location_from_cv = profile.get("location", "")
 
-    # Сохраняем обогащённый профиль перед переходом к локации
     await update_session(session_id,
         cv_profile=json.dumps(profile, ensure_ascii=False),
         step="ask_location"
@@ -639,7 +696,6 @@ async def _process_next_company(websocket, session_id, lang, selected, idx):
         "text": get_message(lang, "adapting", company=company["name"])
     })
 
-    # Новая сигнатура: adapt_cv(profile, company, job, lang)
     best_job = None
     jobs = company.get("jobs", [])
     if jobs:
@@ -655,7 +711,6 @@ async def _process_next_company(websocket, session_id, lang, selected, idx):
 
     email_data = await keep_alive(websocket, write_email(profile, adapted, company, lang))
 
-    # Сохраняем данные письма в компанию
     company["_lebenslauf_de"] = adapted.get("professional_summary_de", "")
     company["_anschreiben_de"] = email_data.get("anschreiben_de", "")
     company["_subject"] = email_data.get("email_subject", "")
