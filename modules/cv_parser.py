@@ -1,16 +1,38 @@
 import os
 import json
+import logging
+import asyncio
 import re
 from groq import Groq
-
-client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
-
+ 
+groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
+GROQ_MODEL = "llama-3.3-70b-versatile"
+ 
+# ============================================================
+# ЯЗЫКОВЫЕ НАСТРОЙКИ
+# ============================================================
+LANG_NAMES = {
+    "ru": "русском языке",
+    "de": "deutscher Sprache",
+    "en": "English",
+    "uk": "українській мові",
+    "ar": "اللغة العربية",
+    "ps": "پښتو ژبه"
+}
+ 
 # ============================================================
 # БАЗА БАРЬЕРОВ ПО ПРОФЕССИЯМ В ГЕРМАНИИ
 # ============================================================
 PROFESSION_BARRIERS = {
     "юрист": {
-        "keywords": ["юрист", "lawyer", "rechtsanwalt", "attorney", "правовед", "legal", "право", "jura", "jurist"],
+        "keywords": [
+            "юрист", "lawyer", "rechtsanwalt", "attorney", "правовед",
+            "legal", "право", "jura", "jurist", "advokat", "адвокат",
+            # украинский
+            "юрист", "адвокат", "правник",
+            # арабский (латинизация)
+            "محامي", "قانون", "حقوق",
+        ],
         "barriers": [
             "Для практики адвокатом в Германии требуется немецкий Staatsexamen (две государственные экзаменации)",
             "Иностранный диплом юриста НЕ признаётся автоматически для адвокатской деятельности",
@@ -28,7 +50,14 @@ PROFESSION_BARRIERS = {
         "reframe": "Иностранный юрист в Германии — это прежде всего эксперт по международному праву и комплаенсу, а не адвокат местной практики."
     },
     "врач": {
-        "keywords": ["врач", "doctor", "arzt", "медик", "physician", "surgeon", "хирург", "терапевт", "педиатр", "medicina", "медицина"],
+        "keywords": [
+            "врач", "doctor", "arzt", "медик", "physician", "surgeon",
+            "хирург", "терапевт", "педиатр", "medicina", "медицина",
+            # украинский
+            "лікар", "медик",
+            # арабский
+            "طبيب", "دكتور", "طب",
+        ],
         "barriers": [
             "Для работы врачом требуется Approbation (государственное признание диплома)",
             "Процедура апробации: перевод диплома → Landesprüfungsamt → анализ программы обучения → возможный Kenntnisprüfung (экзамен на знания)",
@@ -45,7 +74,14 @@ PROFESSION_BARRIERS = {
         "reframe": "Врач без апробации — потенциальный медицинский советник, исследователь или MedTech специалист."
     },
     "учитель": {
-        "keywords": ["учитель", "teacher", "lehrer", "педагог", "преподаватель", "educator", "schullehrer"],
+        "keywords": [
+            "учитель", "teacher", "lehrer", "педагог", "преподаватель",
+            "educator", "schullehrer",
+            # украинский
+            "вчитель", "викладач",
+            # арабский
+            "معلم", "مدرس",
+        ],
         "barriers": [
             "Признание учительской квалификации — компетенция каждой федеральной земли отдельно",
             "Немецкая система имеет специфическую структуру (Gymnasium, Realschule, Hauptschule) без аналогов",
@@ -62,7 +98,13 @@ PROFESSION_BARRIERS = {
         "reframe": "Педагог из другой страны — идеальный учитель иностранных языков и корпоративных тренингов."
     },
     "архитектор": {
-        "keywords": ["архитектор", "architect", "architekt", "проектировщик", "градостроитель"],
+        "keywords": [
+            "архитектор", "architect", "architekt", "проектировщик", "градостроитель",
+            # украинский
+            "архітектор",
+            # арабский
+            "مهندس معماري", "معماري",
+        ],
         "barriers": [
             "Для использования титула 'Architekt' требуется регистрация в Architektenkammer (земельная палата архитекторов)",
             "Иностранный диплом признаётся через процедуру Berufsanerkennung",
@@ -76,7 +118,13 @@ PROFESSION_BARRIERS = {
         "reframe": "Архитектор без немецкой лицензии — эксперт BIM и международного проектирования."
     },
     "инженер": {
-        "keywords": ["инженер", "engineer", "ingenieur", "механик", "электрик", "конструктор"],
+        "keywords": [
+            "инженер", "engineer", "ingenieur", "механик", "электрик", "конструктор",
+            # украинский
+            "інженер",
+            # арабский
+            "مهندس",
+        ],
         "barriers": [
             "Инженерный диплом в целом хорошо признаётся, но для некоторых специальностей (строительство, энергетика) может требоваться Kammermitgliedschaft",
         ],
@@ -87,7 +135,14 @@ PROFESSION_BARRIERS = {
         "reframe": "Инженерная квалификация — одна из лучших для трудоустройства в Германии."
     },
     "бухгалтер": {
-        "keywords": ["бухгалтер", "accountant", "buchhalter", "финансист", "аудитор", "steuerberater", "налоговый"],
+        "keywords": [
+            "бухгалтер", "accountant", "buchhalter", "финансист", "аудитор",
+            "steuerberater", "налоговый",
+            # украинский
+            "бухгалтер", "фінансист",
+            # арабский
+            "محاسب", "مالية",
+        ],
         "barriers": [
             "Steuerberater (налоговый консультант) требует сдачи немецкого государственного экзамена",
             "Wirtschaftsprüfer (аудитор) — аналогично, требует немецкой лицензии",
@@ -101,7 +156,13 @@ PROFESSION_BARRIERS = {
         "reframe": "Бухгалтер без немецкой лицензии — отличный кандидат в контроллинг и финансовый анализ."
     },
     "психолог": {
-        "keywords": ["психолог", "psychologist", "psychologe", "психотерапевт", "therapist"],
+        "keywords": [
+            "психолог", "psychologist", "psychologe", "психотерапевт", "therapist",
+            # украинский
+            "психолог", "психотерапевт",
+            # арабский
+            "طبيب نفسي", "نفسي",
+        ],
         "barriers": [
             "Психотерапевт (Psychotherapeut) — строго лицензируемая профессия, требует немецкого признания",
             "Требование немецкого C2 для психотерапевтической практики",
@@ -116,9 +177,57 @@ PROFESSION_BARRIERS = {
         "reframe": "Психолог без немецкой лицензии — ценный HR-эксперт, коуч и UX-исследователь."
     }
 }
-
+ 
 # ============================================================
-# ОПРЕДЕЛЕНИЕ ПРОФЕССИИ ИЗ ПРОФИЛЯ
+# КЛЮЧЕВЫЕ СЛОВА ДЛЯ ОПРЕДЕЛЕНИЯ ТИПА ТЕКСТА
+# ============================================================
+CV_KEYWORDS = [
+    # Русский
+    "опыт работы", "образование", "навыки", "должность", "компания",
+    "университет", "институт", "специальность", "резюме", "достижения",
+    # Немецкий
+    "berufserfahrung", "ausbildung", "kenntnisse", "lebenslauf", "arbeitgeber",
+    "universität", "hochschule", "fähigkeiten", "tätigkeiten", "abschluss",
+    # Английский
+    "experience", "education", "skills", "employment", "university",
+    "bachelor", "master", "degree", "responsibilities", "achievements",
+    # Украинский
+    "досвід роботи", "освіта", "навички", "посада", "компанія",
+    # Арабский
+    "خبرة", "تعليم", "مهارات", "وظيفة",
+]
+ 
+ 
+# ============================================================
+# ОПРЕДЕЛЕНИЕ ТИПА ВВОДА
+# ============================================================
+def is_full_cv(text: str) -> bool:
+    """
+    Определяет является ли текст полноценным резюме или просто кратким запросом.
+    Логика: если текст длинный И содержит ключевые слова резюме — это резюме.
+    """
+    if not text or not text.strip():
+        return False
+ 
+    text_lower = text.lower()
+    word_count = len(text.split())
+ 
+    if word_count < 30:
+        return False
+ 
+    keyword_matches = sum(1 for kw in CV_KEYWORDS if kw in text_lower)
+ 
+    if word_count >= 100 and keyword_matches >= 2:
+        return True
+ 
+    if word_count >= 50 and keyword_matches >= 3:
+        return True
+ 
+    return False
+ 
+ 
+# ============================================================
+# ОПРЕДЕЛЕНИЕ ПРОФЕССИИ С БАРЬЕРАМИ
 # ============================================================
 def detect_profession(cv_text: str) -> list:
     """Определяет профессию кандидата по ключевым словам."""
@@ -130,10 +239,10 @@ def detect_profession(cv_text: str) -> list:
                 detected.append(profession)
                 break
     return detected
-
-
+ 
+ 
 # ============================================================
-# ПОИСК СКРЫТЫХ ПАТТЕРНОВ
+# СКРЫТЫЕ ПАТТЕРНЫ НАВЫКОВ
 # ============================================================
 HIDDEN_PATTERNS = [
     {
@@ -152,6 +261,16 @@ HIDDEN_PATTERNS = [
         "description": "Юридическое образование + compliance опыт = готовый Compliance Manager без немецкой лицензии"
     },
     {
+        "skills": ["lawyer", "python"],
+        "label": "LegalTech Specialist",
+        "description": "Rare combination: legal knowledge + programming = LegalTech developer or legal process automation consultant"
+    },
+    {
+        "skills": ["legal", "compliance"],
+        "label": "Compliance Expert",
+        "description": "Legal background + compliance experience = ready Compliance Manager without German license"
+    },
+    {
         "skills": ["врач", "python"],
         "label": "Medical Data Scientist",
         "description": "Медицинское образование + программирование = медицинский дата-сайентист или MedTech специалист"
@@ -162,14 +281,29 @@ HIDDEN_PATTERNS = [
         "description": "Медицина + IT = цифровизация здравоохранения, telehealth, медицинские информационные системы"
     },
     {
+        "skills": ["doctor", "python"],
+        "label": "Medical Data Scientist",
+        "description": "Medical background + programming = medical data scientist or MedTech specialist"
+    },
+    {
         "skills": ["финансы", "python"],
         "label": "FinTech Developer",
         "description": "Финансовая экспертиза + программирование = FinTech специалист"
     },
     {
+        "skills": ["finance", "python"],
+        "label": "FinTech Developer",
+        "description": "Financial expertise + programming = FinTech specialist"
+    },
+    {
         "skills": ["учитель", "онлайн"],
         "label": "E-Learning Specialist",
         "description": "Педагогика + онлайн-опыт = разработчик e-learning контента и учебных программ"
+    },
+    {
+        "skills": ["teacher", "online"],
+        "label": "E-Learning Specialist",
+        "description": "Pedagogy + online experience = e-learning content developer"
     },
     {
         "skills": ["менеджер", "русский"],
@@ -182,385 +316,347 @@ HIDDEN_PATTERNS = [
         "description": "Инженерное образование + программирование = специалист по промышленной автоматизации и IoT"
     },
     {
+        "skills": ["engineer", "python"],
+        "label": "Industrial Automation Engineer",
+        "description": "Engineering background + programming = industrial automation and IoT specialist"
+    },
+    {
         "skills": ["маркетинг", "ai"],
         "label": "AI Marketing Specialist",
         "description": "Маркетинговый опыт + AI-инструменты = очень востребованная роль в 2024-2025"
     },
+    {
+        "skills": ["marketing", "ai"],
+        "label": "AI Marketing Specialist",
+        "description": "Marketing experience + AI tools = highly demanded role in 2024-2025"
+    },
 ]
-
-
+ 
+ 
 def detect_hidden_patterns(cv_text: str, profile: dict) -> list:
     """Ищет неочевидные комбинации навыков."""
     cv_lower = cv_text.lower()
     profile_str = json.dumps(profile, ensure_ascii=False).lower()
     combined = cv_lower + " " + profile_str
-
+ 
     found_patterns = []
     for pattern in HIDDEN_PATTERNS:
         if all(skill in combined for skill in pattern["skills"]):
             found_patterns.append(pattern)
     return found_patterns
-
-
+ 
+ 
+# ============================================================
+# ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
+# ============================================================
+def groq_ask(prompt: str) -> str:
+    response = groq_client.chat.completions.create(
+        model=GROQ_MODEL,
+        messages=[{"role": "user", "content": prompt}],
+        max_tokens=4000,
+    )
+    return response.choices[0].message.content
+ 
+ 
+async def groq_ask_async(prompt: str) -> str:
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, groq_ask, prompt)
+ 
+ 
+def clean_json(raw: str) -> str:
+    """Убирает markdown-обёртки из JSON ответа."""
+    raw = raw.strip()
+    if raw.startswith("```"):
+        raw = raw.split("```")[1]
+        if raw.startswith("json"):
+            raw = raw[4:]
+    raw = re.sub(r"^```json\s*", "", raw)
+    raw = re.sub(r"\s*```$", "", raw)
+    return raw.strip()
+ 
+ 
 # ============================================================
 # ОСНОВНОЙ ПАРСЕР CV
 # ============================================================
 async def parse_cv(cv_text: str, lang: str = "ru") -> dict:
     """
-    Парсит CV и возвращает структурированный профиль с барьерами и workarounds.
+    Парсит CV и возвращает структурированный профиль.
+    Учитывает язык кандидата, профессиональные барьеры и скрытые паттерны.
     """
-
-    LANG_NAMES = {
-        "ru": "русском языке",
-        "de": "deutscher Sprache",
-        "en": "English",
-        "uk": "українській мові",
-        "ar": "اللغة العربية",
-        "ps": "پښتو ژبه"
-    }
     lang_name = LANG_NAMES.get(lang, "русском языке")
-
+ 
     # 1. Определяем барьеры на основе профессии
     detected_professions = detect_profession(cv_text)
     barriers_info = []
     workarounds_info = []
     reframes = []
-
+ 
     for prof in detected_professions:
         data = PROFESSION_BARRIERS[prof]
         barriers_info.extend(data["barriers"])
         workarounds_info.extend(data["workarounds"])
         reframes.append(data["reframe"])
-
+ 
     barriers_text = ""
     if barriers_info:
         barriers_text = f"""
 ВАЖНО — ПРОФЕССИОНАЛЬНЫЕ БАРЬЕРЫ В ГЕРМАНИИ:
 {chr(10).join(f'⚠️ {b}' for b in barriers_info)}
-
+ 
 ОБХОДНЫЕ ПУТИ И АЛЬТЕРНАТИВЫ:
 {chr(10).join(f'✅ {w}' for w in workarounds_info)}
-
+ 
 ПЕРЕОСМЫСЛЕНИЕ ПРОФИЛЯ:
 {chr(10).join(reframes)}
-
+ 
 При анализе CV обязательно учти эти барьеры и предложи реалистичные пути трудоустройства.
 """
-
-    prompt = f"""Ты — опытный карьерный консультант по трудоустройству в Германии (DACH регион).
-
-Тебе нужно глубоко проанализировать CV кандидата. Не просто извлечь данные — а ПЕРЕОСМЫСЛИТЬ профиль для немецкого рынка труда.
-
-ЯЗЫК ОТВЕТА: Все текстовые поля JSON (кроме summary_de, ats_keywords) пиши ИСКЛЮЧИТЕЛЬНО на {lang_name}.
-Это критически важно — кандидат читает на этом языке.
-Исключение: summary_de — на немецком, ats_keywords — на немецком/английском.
-
+ 
+    prompt = f"""Ты — опытный карьерный консультант и хедхантер со специализацией на рынке труда DACH (Германия, Австрия, Швейцария).
+За твоими плечами — тысячи успешно трудоустроенных кандидатов. Ты умеешь видеть в людях то, что они сами в себе не замечают.
+ 
+ЯЗЫК ОТВЕТА: Все текстовые поля JSON пиши ИСКЛЮЧИТЕЛЬНО на {lang_name}.
+Это критически важно — кандидат читает на этом языке и не должен видеть текст на других языках.
+Исключение: search_queries для Google Maps — только на немецком.
+ 
 {barriers_text}
-
-ЗАДАЧА:
-1. Извлеки основные данные (имя, контакты, образование, опыт, навыки)
-2. Определи РЕАЛЬНЫЕ возможности в Германии с учётом барьеров
-3. Найди НЕОЧЕВИДНЫЕ комбинации навыков и опыта
-4. Сформулируй сильные стороны в немецком контексте
-5. Укажи конкретные должности (job titles) на немецком рынке
-6. Задай 3 умных уточняющих вопроса на {lang_name}
-   ЗАПРЕЩЕНО спрашивать про барьеры (Staatsexamen, признание диплома) — кандидат их и так знает
-   ЗАПРЕЩЕНО спрашивать про немецкое право или немецкий язык — это очевидно из CV
-   НУЖНО спрашивать про: скрытые навыки, реальные интересы, опыт который не в CV, AI/tech проекты
-
-CV КАНДИДАТА:
+ 
+ТВОЯ ЗАДАЧА: Внимательно прочитай резюме и сделай глубокий анализ. Думай как детектив и стратег одновременно.
+ 
+ШАГ 1 — ФАКТЫ: Извлеки базовую информацию (имя, локация, опыт, навыки, языки).
+ 
+ШАГ 2 — ИНТЕРПРЕТАЦИЯ: Что на самом деле умеет этот человек?
+Примеры неочевидных связей:
+- Юрист + Python + Prompt Engineering = LegalTech специалист, AI Compliance эксперт
+- Врач + менеджмент = Healthcare Operations Manager
+- Учитель + публичные выступления = Corporate Trainer, HR Business Partner
+- Бухгалтер + Excel + VBA = Financial Automation Specialist
+ 
+ШАГ 3 — РЫНОК DACH: Где в Германии, Австрии, Швейцарии ищут ИМЕННО такой профиль?
+Думай нестандартно:
+- Если юрист НЕ немецкого права — это не минус, это плюс для международных компаний, LegalTech стартапов
+- Ищи компании где уникальный микс навыков кандидата является преимуществом
+ 
+ШАГ 4 — УТОЧНЯЮЩИЕ ВОПРОСЫ: Задай 3-5 конкретных вопросов которые помогут раскрыть скрытый потенциал.
+Хорошие вопросы:
+- "Вы упоминаете что работали с командой — расскажите, каких конкретных результатов достигли?"
+- "Вы используете Python в работе — для каких задач? Есть примеры автоматизации?"
+Плохой вопрос: "Укажите желаемую зарплату" — слишком банально
+ 
+РЕЗЮМЕ / ПРОФИЛЬ КАНДИДАТА:
 {cv_text}
-
-Отвечай ТОЛЬКО в формате JSON (без markdown, без объяснений):
+ 
+Отвечай СТРОГО в JSON без markdown и без лишних комментариев:
 {{
-  "name": "Имя Фамилия",
-  "email": "",
-  "phone": "",
-  "location": "",
-  "profession_raw": "Профессия из CV",
-  "profession_germany": "Реалистичная профессия/роль в Германии",
-  "education": ["образование"],
+  "name": "полное имя кандидата (или пустая строка если не указано)",
+  "location": "город, страна (как указано или пустая строка)",
   "experience_years": 0,
-  "experience": [
-    {{"company": "", "role": "", "duration": "", "achievements": ""}}
+  "primary_domain": "основная сфера деятельности (1-3 слова)",
+  "hidden_competencies": [
+    "неочевидная компетенция 1 — объясни почему она есть",
+    "неочевидная компетенция 2 — объясни почему она есть"
   ],
-  "skills": ["навык1", "навык2"],
-  "languages": [{{"language": "", "level": ""}}],
-  "barriers": ["барьер1", "барьер2"],
-  "workarounds": ["обходной путь 1", "обходной путь 2"],
-  "hidden_strengths": ["сильная сторона 1"],
-  "hidden_competencies": ["скрытая компетенция 1"],
-  "cross_domain_opportunities": ["роль 1 в DACH", "роль 2"],
-  "target_roles_de": ["должность1 на немецком", "должность2"],
-  "target_industries": ["отрасль1", "отрасль2"],
-  "search_queries": ["немецкий поисковый запрос 1 для Google Maps", "запрос 2", "запрос 3"],
-  "ats_keywords": ["keyword1", "keyword2"],
-  "summary_de": "Профессиональное резюме (2-3 предложения) на немецком языке",
-  "summary_ru": "Профессиональное резюме (2-3 предложения) на {lang_name}",
-  "reframe": "Как позиционировать кандидата на немецком рынке",
+  "cross_domain_opportunities": [
+    "конкретное название должности в DACH",
+    "ещё одна должность"
+  ],
+  "skills": ["навык 1", "навык 2", "навык 3"],
+  "languages": [
+    {{"lang": "DE", "level": "B2"}},
+    {{"lang": "EN", "level": "C1"}}
+  ],
+  "target_companies_dach": [
+    "тип компании 1 (например: LegalTech стартапы в Берлине)",
+    "тип компании 2"
+  ],
+  "search_queries": [
+    "поисковый запрос на немецком для Google Maps 1",
+    "поисковый запрос на немецком для Google Maps 2",
+    "поисковый запрос на немецком для Google Maps 3"
+  ],
+  "barriers": [],
+  "workarounds": [],
   "clarifying_questions": [
-    "конкретный умный вопрос 1 на {lang_name} — СТРОГО на {lang_name}",
-    "конкретный умный вопрос 2 на {lang_name}",
-    "конкретный умный вопрос 3 на {lang_name}"
+    "живой конкретный вопрос 1",
+    "живой конкретный вопрос 2",
+    "живой конкретный вопрос 3"
   ]
 }}"""
-
-    import asyncio as _asyncio
+ 
+    # Fallback вопросы на всех языках
+    fallback_questions = {
+        "ru": [
+            "Есть ли у вас опыт работы с немецкими компаниями или в немецкоязычной среде?",
+            "Какой у вас текущий уровень немецкого языка?",
+            "Рассматриваете ли вы переобучение или дополнительную сертификацию в Германии?",
+            "Есть ли у вас опыт в сферах, не отражённых в CV (волонтёрство, проекты, фриланс)?",
+            "В каком городе или регионе Германии вы ищете работу?"
+        ],
+        "de": [
+            "Haben Sie Erfahrung mit deutschen Unternehmen oder in deutschsprachigen Umgebungen?",
+            "Wie ist Ihr aktuelles Deutschniveau?",
+            "Erwägen Sie eine Umschulung oder zusätzliche Zertifizierung in Deutschland?",
+            "Haben Sie Erfahrungen, die nicht im Lebenslauf stehen (Ehrenamt, Projekte, Freelance)?",
+            "In welcher Stadt oder Region Deutschlands suchen Sie Arbeit?"
+        ],
+        "en": [
+            "Do you have experience working with German companies or in a German-speaking environment?",
+            "What is your current level of German?",
+            "Are you open to retraining or additional certification in Germany?",
+            "Do you have experience not reflected in your CV (volunteering, projects, freelance)?",
+            "Which city or region of Germany are you looking to work in?"
+        ],
+        "uk": [
+            "Чи є у вас досвід роботи з німецькими компаніями або в німецькомовному середовищі?",
+            "Який у вас поточний рівень німецької мови?",
+            "Чи розглядаєте ви перенавчання або додаткову сертифікацію в Німеччині?",
+            "Чи є у вас досвід, не відображений у резюме (волонтерство, проекти, фріланс)?",
+            "У якому місті або регіоні Німеччини ви шукаєте роботу?"
+        ],
+        "ar": [
+            "هل لديك خبرة في العمل مع شركات ألمانية أو في بيئة ناطقة بالألمانية؟",
+            "ما مستوى اللغة الألمانية الحالي لديك؟",
+            "هل تفكر في إعادة التدريب أو الحصول على شهادات إضافية في ألمانيا؟",
+            "هل لديك خبرة غير مذكورة في السيرة الذاتية (تطوع، مشاريع، عمل حر)؟",
+            "في أي مدينة أو منطقة في ألمانيا تبحث عن عمل؟"
+        ],
+        "ps": [
+            "آیا تاسو د جرمني شرکتونو سره یا د جرمني ژبې چاپیریال کې د کار تجربه لرئ؟",
+            "ستاسو د جرمني ژبې اوسنی کچه څه ده؟",
+            "آیا تاسو د جرمني کې د بیا روزنې یا اضافي سند ترلاسه کولو ته چمتو یاست؟",
+            "آیا تاسو داسې تجربه لرئ چې ستاسو د CV ​​​​کې نه وي (داوطلبانه کار، پروژې، فریلانس)?",
+            "تاسو د جرمني کوم ښار یا سیمه کې کار لټوئ؟"
+        ]
+    }
+ 
     try:
-        loop = _asyncio.get_event_loop()
-        response = await loop.run_in_executor(
-            None,
-            lambda: client.chat.completions.create(
-                model="llama-3.3-70b-versatile",
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.3,
-                max_tokens=2000,
-            )
-        )
-        raw = response.choices[0].message.content.strip()
-        logging.info(f"CV Parser OK, response length: {len(raw)}")
-    except Exception as api_err:
-        logging.error(f"CV Parser GROQ API ERROR: {api_err}", exc_info=True)
-        raw = ""
-
-    if not raw:
-        logging.error("CV Parser: empty response from Groq")
+        result = await groq_ask_async(prompt)
+        result = clean_json(result)
+        profile = json.loads(result)
+ 
+        # 2. Подставляем барьеры если LLM их не нашла
+        if not profile.get("barriers"):
+            profile["barriers"] = barriers_info
+        if not profile.get("workarounds"):
+            profile["workarounds"] = workarounds_info
+ 
+        # 3. Ищем скрытые паттерны
+        hidden_patterns = detect_hidden_patterns(cv_text, profile)
+        if hidden_patterns:
+            profile["hidden_patterns"] = [
+                {"label": p["label"], "description": p["description"]}
+                for p in hidden_patterns
+            ]
+            for p in hidden_patterns:
+                roles = profile.setdefault("cross_domain_opportunities", [])
+                if p["label"] not in roles:
+                    roles.append(p["label"])
+        else:
+            profile["hidden_patterns"] = []
+ 
+        # 4. Метаданные
+        profile["detected_professions"] = detected_professions
+        profile["has_barriers"] = len(barriers_info) > 0
+ 
+        return profile
+ 
+    except Exception as e:
+        logging.error(f"CV Parser error: {e}")
         return {
-            "name": "Не определено", "email": "", "phone": "", "location": "",
-            "profession_raw": "Не определено", "profession_germany": "Требует уточнения",
-            "education": [], "experience_years": 0, "experience": [],
-            "skills": [], "languages": [], "barriers": barriers_info,
-            "workarounds": workarounds_info, "hidden_strengths": [],
-            "target_roles_de": [], "target_industries": [], "ats_keywords": [],
-            "summary_de": "", "summary_ru": "Ошибка API. Попробуйте ещё раз.",
-            "reframe": "", "clarifying_questions": [],
-            "hidden_patterns": [], "detected_professions": detected_professions,
-            "has_barriers": len(barriers_info) > 0
-        }
-
-    # Убираем возможные markdown-обёртки
-    raw = re.sub(r"^```json\s*", "", raw)
-    raw = re.sub(r"\s*```$", "", raw)
-    raw = raw.strip()
-
-    try:
-        profile = json.loads(raw)
-        logging.info(f"CV Parser JSON OK: name={profile.get('name')}")
-    except json.JSONDecodeError as json_err:
-        logging.error(f"CV Parser JSON ERROR: {json_err}, raw[:300]: {raw[:300]}")
-        # Fallback: базовый профиль
-        profile = {
-            "name": "Не определено",
-            "email": "",
-            "phone": "",
+            "name": "",
             "location": "",
-            "profession_raw": "Не определено",
-            "profession_germany": "Требует уточнения",
-            "education": [],
             "experience_years": 0,
-            "experience": [],
+            "primary_domain": "",
+            "hidden_competencies": [],
+            "cross_domain_opportunities": [],
             "skills": [],
             "languages": [],
+            "target_companies_dach": [],
+            "search_queries": [],
             "barriers": barriers_info,
             "workarounds": workarounds_info,
-            "hidden_strengths": [],
-            "target_roles_de": [],
-            "target_industries": [],
-            "ats_keywords": [],
-            "summary_de": "",
-            "summary_ru": "CV обработано, но структура ответа нарушена. Пожалуйста, проверьте данные.",
-            "reframe": "",
-            "clarifying_questions": []
+            "hidden_patterns": [],
+            "detected_professions": detected_professions,
+            "has_barriers": len(barriers_info) > 0,
+            "clarifying_questions": fallback_questions.get(lang, fallback_questions["ru"])
         }
-
-    # 2. Добавляем барьеры если LLM их не нашла
-    if "barriers" not in profile or not profile["barriers"]:
-        profile["barriers"] = barriers_info
-    if "workarounds" not in profile or not profile["workarounds"]:
-        profile["workarounds"] = workarounds_info
-
-    # 3. Ищем скрытые паттерны
-    hidden_patterns = detect_hidden_patterns(cv_text, profile)
-    if hidden_patterns:
-        profile["hidden_patterns"] = [
-            {
-                "label": p["label"],
-                "description": p["description"]
-            }
-            for p in hidden_patterns
-        ]
-        # Добавляем роли из паттернов в target_roles
-        for p in hidden_patterns:
-            if p["label"] not in profile.get("target_roles_de", []):
-                profile.setdefault("target_roles_de", []).append(p["label"])
-    else:
-        profile["hidden_patterns"] = []
-
-    # 4. Метаданные
-    profile["detected_professions"] = detected_professions
-    profile["has_barriers"] = len(barriers_info) > 0
-
-    return profile
-
-
+ 
+ 
 # ============================================================
-# ФОРМАТИРОВАНИЕ ПРОФИЛЯ ДЛЯ ОТОБРАЖЕНИЯ В ЧАТЕ
+# ФОРМАТИРОВАНИЕ ПРОФИЛЯ ДЛЯ ЧАТА
 # ============================================================
 def format_profile_message(profile: dict, lang: str = "ru") -> str:
-    """Форматирует профиль для показа пользователю."""
-
+    """Форматирует профиль для показа пользователю в чате."""
+ 
     name = profile.get("name", "Кандидат")
-    profession_raw = profile.get("profession_raw", "")
-    profession_germany = profile.get("profession_germany", "")
-    summary = profile.get("summary_ru", "")
+    primary_domain = profile.get("primary_domain", "")
+    cross_domain = profile.get("cross_domain_opportunities", [])
     barriers = profile.get("barriers", [])
     workarounds = profile.get("workarounds", [])
     hidden_patterns = profile.get("hidden_patterns", [])
-    target_roles = profile.get("target_roles_de", [])
+    hidden_competencies = profile.get("hidden_competencies", [])
     skills = profile.get("skills", [])
     languages = profile.get("languages", [])
-    reframe = profile.get("reframe", "")
-
+    target_companies = profile.get("target_companies_dach", [])
+ 
     msg = f"✅ **Профиль создан: {name}**\n\n"
-
-    if summary:
-        msg += f"📋 {summary}\n\n"
-
-    if profession_raw and profession_germany and profession_raw != profession_germany:
-        msg += f"🎯 **Профессия:** {profession_raw}\n"
-        msg += f"🇩🇪 **На рынке Германии:** {profession_germany}\n\n"
-
-    if reframe:
-        msg += f"💡 **Стратегия позиционирования:** {reframe}\n\n"
-
+ 
+    if primary_domain:
+        msg += f"🎯 **Сфера:** {primary_domain}\n\n"
+ 
+    # Скрытые компетенции от LLM
+    if hidden_competencies:
+        msg += "🔍 **Скрытые компетенции:**\n"
+        for hc in hidden_competencies[:3]:
+            msg += f"  • {hc}\n"
+        msg += "\n"
+ 
+    # Барьеры — честно и прямо
     if barriers:
         msg += "⚠️ **Важные барьеры для трудоустройства:**\n"
         for b in barriers:
             msg += f"  • {b}\n"
         msg += "\n"
-
+ 
+    # Workarounds
     if workarounds:
         msg += "✅ **Обходные пути и возможности:**\n"
         for w in workarounds[:5]:
             msg += f"  • {w}\n"
         msg += "\n"
-
+ 
+    # Скрытые паттерны из базы
     if hidden_patterns:
-        msg += "🔍 **Обнаружены уникальные комбинации навыков:**\n"
+        msg += "🌟 **Уникальные комбинации навыков:**\n"
         for p in hidden_patterns:
-            msg += f"  🌟 **{p['label']}** — {p['description']}\n"
+            msg += f"  **{p['label']}** — {p['description']}\n"
         msg += "\n"
-
-    if target_roles:
-        msg += f"🎯 **Целевые роли в Германии:**\n"
-        for role in target_roles[:6]:
+ 
+    # Целевые роли
+    if cross_domain:
+        msg += "🇩🇪 **Целевые роли в DACH:**\n"
+        for role in cross_domain[:6]:
             msg += f"  • {role}\n"
         msg += "\n"
-
+ 
+    # Типы компаний
+    if target_companies:
+        msg += "🏢 **Где искать:**\n"
+        for c in target_companies[:4]:
+            msg += f"  • {c}\n"
+        msg += "\n"
+ 
+    # Навыки и языки
     if skills:
-        top_skills = skills[:8]
-        msg += f"🛠️ **Ключевые навыки:** {', '.join(top_skills)}\n"
-
+        msg += f"🛠️ **Ключевые навыки:** {', '.join(skills[:8])}\n"
+ 
     if languages:
-        lang_list = [f"{l.get('language', '')} ({l.get('level', '')})" for l in languages]
+        lang_list = [f"{l.get('lang', '')} ({l.get('level', '')})" for l in languages]
         msg += f"🗣️ **Языки:** {', '.join(lang_list)}\n"
-
+ 
     return msg
-
-
-# ============================================================
-# ГЕНЕРАЦИЯ УТОЧНЯЮЩИХ ВОПРОСОВ
-# ============================================================
-async def generate_questions(profile: dict, lang: str = "ru") -> list:
-    """
-    Генерирует уточняющие вопросы для усиления профиля.
-    Учитывает барьеры и workarounds.
-    """
-    LANG_NAMES = {
-        "ru": "русском языке",
-        "de": "deutscher Sprache",
-        "en": "English",
-        "uk": "українській мові",
-        "ar": "اللغة العربية",
-        "ps": "پښتو ژبه"
-    }
-    lang_name = LANG_NAMES.get(lang, "русском языке")
-
-    barriers = profile.get("barriers", [])
-    workarounds = profile.get("workarounds", [])
-    hidden_patterns = profile.get("hidden_patterns", [])
-    target_roles = profile.get("target_roles_de", [])
-
-    barriers_context = ""
-    if barriers:
-        barriers_context = f"""
-Кандидат сталкивается с профессиональными барьерами:
-{chr(10).join(barriers)}
-
-Возможные пути обхода:
-{chr(10).join(workarounds[:3])}
-
-Задавай вопросы, которые помогут определить, применим ли тот или иной workaround к данному кандидату.
-"""
-
-    patterns_context = ""
-    if hidden_patterns:
-        patterns_context = f"""
-Обнаружены потенциальные роли: {', '.join(p['label'] for p in hidden_patterns)}
-Уточни, есть ли у кандидата опыт в этих направлениях.
-"""
-
-    prompt = f"""Ты — карьерный консультант. Изучи профиль кандидата и задай 4-5 умных уточняющих вопроса.
-
-ПРОФИЛЬ:
-{json.dumps(profile, ensure_ascii=False, indent=2)}
-
-{barriers_context}
-{patterns_context}
-
-ЦЕЛЬ ВОПРОСОВ:
-1. Выявить скрытые преимущества, не отражённые в CV
-2. Понять применимость обходных путей
-3. Уточнить мотивацию и предпочтения
-4. Найти конкурентные преимущества на немецком рынке
-5. Определить готовность к переобучению или смене направления
-
-ФОРМАТ ОТВЕТА — только JSON массив строк:
-["Вопрос 1?", "Вопрос 2?", "Вопрос 3?", "Вопрос 4?", "Вопрос 5?"]
-
-Вопросы на {lang_name} — СТРОГО на этом языке, никакого немецкого если язык не немецкий.
-Вопросы должны быть конкретными, не общими ("расскажите о себе" — плохо).
-"""
-
-    response = client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0.5,
-        max_tokens=500,
-    )
-
-    raw = response.choices[0].message.content.strip()
-    raw = re.sub(r"^```json\s*", "", raw)
-    raw = re.sub(r"\s*```$", "", raw)
-    raw = raw.strip()
-
-    try:
-        questions = json.loads(raw)
-        if isinstance(questions, list):
-            return questions[:5]
-    except json.JSONDecodeError:
-        pass
-
-    # Fallback вопросы
-    return [
-        "Есть ли у вас опыт работы с немецкими компаниями или в немецкоязычной среде?",
-        "Какой у вас текущий уровень немецкого языка?",
-        "Рассматриваете ли вы переобучение или дополнительную сертификацию в Германии?",
-        "Есть ли у вас опыт в сферах, не отражённых в CV (волонтёрство, проекты, фриланс)?",
-        "В каком городе или регионе Германии вы ищете работу?"
-    ]
-
-
+ 
+ 
 # ============================================================
 # ОБНОВЛЕНИЕ ПРОФИЛЯ ПОСЛЕ ДИАЛОГА
 # ============================================================
@@ -569,55 +665,57 @@ async def enrich_profile(profile: dict, qa_pairs: list, lang: str = "ru") -> dic
     Обновляет и усиливает профиль после диалога с кандидатом.
     qa_pairs: список {"question": "...", "answer": "..."}
     """
-
+    lang_name = LANG_NAMES.get(lang, "русском языке")
+ 
     qa_text = "\n".join([
         f"Q: {pair.get('question', '')}\nA: {pair.get('answer', '')}"
         for pair in qa_pairs
     ])
-
-    prompt = f"""Ты — опытный карьерный консультант. 
-На основе исходного профиля CV и ответов кандидата на вопросы — создай УСИЛЕННЫЙ финальный профиль.
-
+ 
+    prompt = f"""Ты — опытный карьерный консультант.
+На основе исходного профиля CV и ответов кандидата — создай УСИЛЕННЫЙ финальный профиль.
+ 
+ЯЗЫК ОТВЕТА: Все текстовые поля JSON пиши на {lang_name}.
+Исключение: search_queries — только на немецком.
+ 
 ИСХОДНЫЙ ПРОФИЛЬ:
 {json.dumps(profile, ensure_ascii=False, indent=2)}
-
+ 
 ДИАЛОГ С КАНДИДАТОМ:
 {qa_text}
-
+ 
 ЗАДАЧА:
 1. Переоцени профиль с учётом новой информации
 2. Найди новые возможности, которые не были видны из CV
 3. Скорректируй целевые роли и стратегию
 4. Усиль позиционирование для немецкого рынка
-5. Обнови ATS-ключевые слова
-
-Верни ОБНОВЛЁННЫЙ JSON профиль в том же формате, что и исходный,
-но с обогащёнными полями и добавь поле "enrichment_notes" с кратким объяснением изменений.
-
+5. Обнови search_queries для поиска компаний
+6. Добавь поле "enrichment_notes" — краткое объяснение изменений
+ 
+Верни ОБНОВЛЁННЫЙ JSON профиль в том же формате, что и исходный.
 ВАЖНО: Верни ТОЛЬКО JSON, без markdown и объяснений."""
-
-    response = client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0.3,
-        max_tokens=2500,
-    )
-
-    raw = response.choices[0].message.content.strip()
-    raw = re.sub(r"^```json\s*", "", raw)
-    raw = re.sub(r"\s*```$", "", raw)
-    raw = raw.strip()
-
+ 
     try:
-        enriched = json.loads(raw)
+        result = await groq_ask_async(prompt)
+        result = clean_json(result)
+        enriched = json.loads(result)
+ 
+        # Сохраняем скрытые паттерны из оригинала если LLM их потеряла
         if not enriched.get("hidden_patterns") and profile.get("hidden_patterns"):
             enriched["hidden_patterns"] = profile["hidden_patterns"]
+        if not enriched.get("barriers") and profile.get("barriers"):
+            enriched["barriers"] = profile["barriers"]
+        if not enriched.get("workarounds") and profile.get("workarounds"):
+            enriched["workarounds"] = profile["workarounds"]
+ 
         return enriched
-    except json.JSONDecodeError:
+ 
+    except Exception as e:
+        logging.error(f"Enrich profile error: {e}")
         profile["enrichment_notes"] = "Обогащение не удалось, используется исходный профиль"
         return profile
-
-
+ 
+ 
 # ============================================================
 # ИЗВЛЕЧЕНИЕ ТЕКСТА ИЗ PDF
 # ============================================================
@@ -633,9 +731,8 @@ async def extract_pdf_text(file_bytes: bytes) -> str:
         if text.strip():
             return text
     except Exception as e:
-        import logging
         logging.warning(f"PyMuPDF failed: {e}")
-
+ 
     try:
         import pdfplumber
         import io
@@ -645,34 +742,5 @@ async def extract_pdf_text(file_bytes: bytes) -> str:
                 text += page.extract_text() or ""
         return text
     except Exception as e:
-        import logging
         logging.error(f"pdfplumber failed: {e}")
         return ""
-
-# ============================================================
-# ОПРЕДЕЛЕНИЕ ТИПА ВВОДА
-# ============================================================
-CV_KEYWORDS = [
-    "опыт работы", "образование", "навыки", "должность", "компания",
-    "университет", "институт", "специальность", "резюме", "достижения",
-    "berufserfahrung", "ausbildung", "kenntnisse", "lebenslauf", "arbeitgeber",
-    "universität", "hochschule", "fähigkeiten", "tätigkeiten", "abschluss",
-    "experience", "education", "skills", "employment", "university",
-    "bachelor", "master", "degree", "responsibilities", "achievements",
-    "досвід роботи", "освіта", "навички", "посада", "компанія",
-    "خبرة", "تعليم", "مهارات", "وظيفة",
-]
-
-def is_full_cv(text: str) -> bool:
-    if not text or not text.strip():
-        return False
-    text_lower = text.lower()
-    word_count = len(text.split())
-    if word_count < 30:
-        return False
-    keyword_matches = sum(1 for kw in CV_KEYWORDS if kw in text_lower)
-    if word_count >= 100 and keyword_matches >= 2:
-        return True
-    if word_count >= 50 and keyword_matches >= 3:
-        return True
-    return False
