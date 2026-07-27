@@ -619,3 +619,31 @@ async def extract_pdf_text(file_bytes: bytes) -> str:
         import logging
         logging.error(f"pdfplumber failed: {e}")
         return ""
+
+# ============================================================
+# ОПРЕДЕЛЕНИЕ ТИПА ВВОДА
+# ============================================================
+CV_KEYWORDS = [
+    "опыт работы", "образование", "навыки", "должность", "компания",
+    "университет", "институт", "специальность", "резюме", "достижения",
+    "berufserfahrung", "ausbildung", "kenntnisse", "lebenslauf", "arbeitgeber",
+    "universität", "hochschule", "fähigkeiten", "tätigkeiten", "abschluss",
+    "experience", "education", "skills", "employment", "university",
+    "bachelor", "master", "degree", "responsibilities", "achievements",
+    "досвід роботи", "освіта", "навички", "посада", "компанія",
+    "خبرة", "تعليم", "مهارات", "وظيفة",
+]
+
+def is_full_cv(text: str) -> bool:
+    if not text or not text.strip():
+        return False
+    text_lower = text.lower()
+    word_count = len(text.split())
+    if word_count < 30:
+        return False
+    keyword_matches = sum(1 for kw in CV_KEYWORDS if kw in text_lower)
+    if word_count >= 100 and keyword_matches >= 2:
+        return True
+    if word_count >= 50 and keyword_matches >= 3:
+        return True
+    return False
