@@ -401,7 +401,44 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
             # ── Выбор локации ─────────────────────────
             elif step == "ask_location":
                 profile = json.loads(session.get("cv_profile") or "{}")
-                profile["location"] = text
+
+                # Проверяем — это город или что-то другое?
+                city_prompt = f"""Пользователь написал: "{text}"
+Это название города/региона для поиска работы? Или это комментарий/вопрос/несогласие?
+
+Верни ТОЛЬКО JSON:
+{{"is_location": true, "city": "название города"}} — если это город
+{{"is_location": false, "reply": "короткий ответ пользователю на {lang}"}} — если это не город"""
+
+                try:
+                    loop = asyncio.get_event_loop()
+                    loc_result = await loop.run_in_executor(None, lambda: groq_client.chat.completions.create(
+                        model="llama-3.3-70b-versatile",
+                        messages=[{"role": "user", "content": city_prompt}],
+                        max_tokens=150,
+                    ).choices[0].message.content.strip())
+                    loc_result = re.sub(r"```.*?```", "", loc_result, flags=re.DOTALL).strip()
+                    loc_data = json.loads(loc_result)
+                except Exception:
+                    loc_data = {"is_location": True, "city": text}
+
+                if not loc_data.get("is_location"):
+                    reply = loc_data.get("reply", "")
+                    location_prompts = {
+                        "ru": f"{reply}\n\nПожалуйста, укажи город или регион где ищешь работу:",
+                        "de": f"{reply}\n\nBitte gib die Stadt oder Region an, wo du Arbeit suchst:",
+                        "en": f"{reply}\n\nPlease specify the city or region where you're looking for work:",
+                        "uk": f"{reply}\n\nБудь ласка, вкажи місто або регіон де шукаєш роботу:",
+                    }
+                    await websocket.send_json({
+                        "type": "message",
+                        "sender": "bot",
+                        "text": location_prompts.get(lang, location_prompts["ru"]),
+                        "buttons": ["Berlin", "München", "Hamburg", "Frankfurt", "Hannover", "Köln", "Düsseldorf"]
+                    })
+                    continue
+
+                profile["location"] = loc_data.get("city", text)
                 await update_session(session_id,
                     cv_profile=json.dumps(profile, ensure_ascii=False),
                     step="job_search"
