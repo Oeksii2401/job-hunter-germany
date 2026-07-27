@@ -256,16 +256,8 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                             "ps": "🔄 CV بیا لوستل کوم...",
                         }.get(lang, "🔄 Перечитываю резюме...")
                     })
-                    # Добавляем инструкцию для более глубокого анализа
-                    deep_cv_text = cv_text + """
-
-ИНСТРУКЦИЯ ДЛЯ ГЛУБОКОГО АНАЛИЗА:
-- Найди ВСЕ скрытые навыки и компетенции
-- Обрати особое внимание на достижения и цифры
-- Найди неочевидные комбинации опыта
-- Предложи нестандартные роли на рынке DACH
-- Задай более точные уточняющие вопросы"""
-                    profile = await keep_alive(websocket, parse_cv(deep_cv_text, lang))
+                    profile = await keep_alive(websocket, parse_cv(cv_text, lang))
+                    logging.info(f"Reparse result: name={profile.get('name')}, domain={profile.get('primary_domain')}")
                     await _after_parsing(websocket, session_id, lang, profile)
                 else:
                     await websocket.send_json({
