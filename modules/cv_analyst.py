@@ -17,6 +17,10 @@ LANG_NAMES = {
     "ps": "پښتو ژبه"
 }
 
+# ============================================================
+# БАЗА ЗНАНИЙ: БАРЬЕРЫ И WORKAROUNDS ДЛЯ КРИТИЧЕСКОГО АНАЛИЗА
+# ============================================================
+# Расширенная база — критический агент знает больше чем парсер
 BARRIER_KNOWLEDGE = {
     "юрист": {
         "hard_barriers": [
@@ -180,16 +184,23 @@ BARRIER_KNOWLEDGE = {
     },
 }
 
+# ============================================================
+# ПАТТЕРНЫ УСИЛЕНИЯ ПРОФИЛЯ
+# ============================================================
 POWER_COMBINATIONS = [
+    # Юридические
     {"tags": ["legal", "gdpr", "privacy"], "boost": "GDPR/Data Privacy Expert — дефицитная специальность"},
     {"tags": ["legal", "fintech"], "boost": "RegTech Specialist — финансовая регуляторика"},
     {"tags": ["legal", "healthcare"], "boost": "Healthcare Compliance — медицинские регуляции"},
+    # Технические
     {"tags": ["python", "data"], "boost": "Data Engineer/Scientist — одна из самых востребованных ролей"},
     {"tags": ["python", "automation"], "boost": "Process Automation Specialist — RPA и автоматизация бизнес-процессов"},
     {"tags": ["cloud", "devops"], "boost": "Cloud/DevOps Engineer — критический дефицит специалистов"},
+    # Языковые
     {"tags": ["arabic", "german"], "boost": "MENA-DACH Bridge — ценный посредник для ближневосточного бизнеса"},
     {"tags": ["russian", "german"], "boost": "CIS-DACH Specialist — востребован в компаниях с СНГ операциями"},
     {"tags": ["ukrainian", "german"], "boost": "UA-DE Integration Specialist — актуально в текущем контексте"},
+    # Межотраслевые
     {"tags": ["medical", "management"], "boost": "Healthcare Management — управление медицинскими организациями"},
     {"tags": ["teaching", "corporate"], "boost": "Learning & Development (L&D) Manager"},
     {"tags": ["engineering", "sales"], "boost": "Technical Sales / Pre-Sales Engineer — высокая зарплата"},
@@ -197,6 +208,9 @@ POWER_COMBINATIONS = [
 ]
 
 
+# ============================================================
+# ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
+# ============================================================
 def groq_ask(prompt: str) -> str:
     response = groq_client.chat.completions.create(
         model=GROQ_MODEL,
@@ -223,7 +237,11 @@ def clean_json(raw: str) -> str:
 
 
 def detect_power_combinations(profile: dict, qa_answers: str) -> list:
-    combined = (json.dumps(profile, ensure_ascii=False) + " " + qa_answers).lower()
+    """Ищет усиливающие комбинации в профиле и ответах кандидата."""
+    combined = (
+        json.dumps(profile, ensure_ascii=False) + " " + qa_answers
+    ).lower()
+
     found = []
     for combo in POWER_COMBINATIONS:
         if all(tag in combined for tag in combo["tags"]):
@@ -231,15 +249,40 @@ def detect_power_combinations(profile: dict, qa_answers: str) -> list:
     return found
 
 
-async def analyze_profile(profile: dict, qa_pairs: list, lang: str = "ru") -> dict:
+# ============================================================
+# КРИТИЧЕСКИЙ АНАЛИЗ ПРОФИЛЯ
+# ============================================================
+async def analyze_profile(
+    profile: dict,
+    qa_pairs: list,
+    lang: str = "ru"
+) -> dict:
+    """
+    Критический агент — глубокая переоценка профиля после диалога.
+
+    Отличие от cv_parser:
+    - cv_parser извлекает и структурирует данные
+    - cv_analyst ПЕРЕОСМЫСЛИВАЕТ: находит скрытые пути, оценивает реальные шансы,
+      даёт честную оценку барьеров и конкретные следующие шаги
+
+    Args:
+        profile: профиль из cv_parser
+        qa_pairs: список {"question": "...", "answer": "..."} из диалога
+        lang: язык кандидата
+
+    Returns:
+        Усиленный профиль с полем "analyst_report"
+    """
     lang_name = LANG_NAMES.get(lang, "русском языке")
 
+    # Формируем контекст диалога
     qa_text = "\n".join([
         f"Вопрос: {pair.get('question', '')}\nОтвет: {pair.get('answer', '')}"
         for pair in qa_pairs
     ])
     qa_answers_raw = " ".join([pair.get('answer', '') for pair in qa_pairs])
 
+    # Собираем барьерный контекст из базы знаний
     detected_professions = profile.get("detected_professions", [])
     barrier_context = ""
     high_value_paths_context = ""
@@ -261,14 +304,14 @@ async def analyze_profile(profile: dict, qa_pairs: list, lang: str = "ru") -> di
                         f"(спрос: {path['demand']}, немецкий: {path['german_needed']})\n"
                     )
 
+    # Ищем усиливающие комбинации
     power_combos = detect_power_combinations(profile, qa_answers_raw)
     power_context = ""
     if power_combos:
         power_context = "\nОБНАРУЖЕНЫ УСИЛИВАЮЩИЕ КОМБИНАЦИИ:\n"
         power_context += "\n".join(f"⚡ {c}" for c in power_combos)
 
-    # FIX: компактная версия профиля — только ключевые поля
-    # Полный json.dumps(profile) давал 8000+ токенов → Groq 429/Context limit
+    # FIX: компактная версия — полный profile даёт 8000+ токенов → Groq 429
     profile_compact = {
         "name": profile.get("name", ""),
         "location": profile.get("location", ""),
@@ -359,7 +402,7 @@ async def analyze_profile(profile: dict, qa_pairs: list, lang: str = "ru") -> di
       "конкретное действие 2",
       "конкретное действие 3"
     ],
-    "power_combinations": {power_combos if power_combos else []}
+    "power_combinations": []
   }}
 }}"""
 
@@ -368,10 +411,12 @@ async def analyze_profile(profile: dict, qa_pairs: list, lang: str = "ru") -> di
         result = clean_json(result)
         enriched = json.loads(result)
 
+        # Сохраняем метаданные из оригинала
         enriched["detected_professions"] = profile.get("detected_professions", [])
         enriched["has_barriers"] = bool(enriched.get("barriers"))
         enriched["hidden_patterns"] = profile.get("hidden_patterns", [])
 
+        # Добавляем power_combinations если LLM их потеряла
         if power_combos and not enriched.get("analyst_report", {}).get("power_combinations"):
             enriched.setdefault("analyst_report", {})["power_combinations"] = power_combos
 
@@ -379,6 +424,7 @@ async def analyze_profile(profile: dict, qa_pairs: list, lang: str = "ru") -> di
 
     except Exception as e:
         logging.error(f"CV Analyst error: {e}", exc_info=True)
+        # Возвращаем оригинальный профиль с пометкой об ошибке
         profile["analyst_report"] = {
             "critical_insights": ["Анализ не удался — используется исходный профиль"],
             "chances_assessment": [],
@@ -390,13 +436,19 @@ async def analyze_profile(profile: dict, qa_pairs: list, lang: str = "ru") -> di
         return profile
 
 
+# ============================================================
+# ФОРМАТИРОВАНИЕ ОТЧЁТА АНАЛИТИКА ДЛЯ ЧАТА
+# ============================================================
 def format_analyst_report(profile: dict, lang: str = "ru") -> str:
+    """Форматирует отчёт критического агента для показа кандидату."""
+
     report = profile.get("analyst_report", {})
     if not report:
         return ""
 
     msg = "🔬 **Углублённый анализ вашего профиля**\n\n"
 
+    # Ключевые открытия
     insights = report.get("critical_insights", [])
     if insights:
         msg += "💡 **Ключевые выводы:**\n"
@@ -404,10 +456,12 @@ def format_analyst_report(profile: dict, lang: str = "ru") -> str:
             msg += f"  • {insight}\n"
         msg += "\n"
 
+    # Стратегия позиционирования
     strategy = report.get("repositioning_strategy", "")
     if strategy:
         msg += f"🎯 **Стратегия позиционирования:**\n{strategy}\n\n"
 
+    # Оценка шансов
     chances = report.get("chances_assessment", [])
     if chances:
         msg += "📊 **Оценка шансов по направлениям:**\n"
@@ -417,6 +471,7 @@ def format_analyst_report(profile: dict, lang: str = "ru") -> str:
             msg += f"  {icon} **{item.get('path', '')}** — {item.get('reason', '')}\n"
         msg += "\n"
 
+    # Power combinations
     power = report.get("power_combinations", [])
     if power:
         msg += "⚡ **Уникальные комбинации навыков:**\n"
@@ -424,6 +479,7 @@ def format_analyst_report(profile: dict, lang: str = "ru") -> str:
             msg += f"  • {p}\n"
         msg += "\n"
 
+    # План обхода барьеров
     bypass = report.get("barrier_bypass_plan", [])
     if bypass:
         msg += "🔓 **План обхода барьеров:**\n"
@@ -432,6 +488,7 @@ def format_analyst_report(profile: dict, lang: str = "ru") -> str:
             msg += f"     → {item.get('plan', '')}\n"
         msg += "\n"
 
+    # Следующие шаги
     steps = report.get("next_steps", [])
     if steps:
         msg += "✅ **Следующие шаги (эта неделя):**\n"
