@@ -305,14 +305,33 @@ CV КАНДИДАТА:
   ]
 }}"""
 
-    response = client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0.3,
-        max_tokens=2000,
-    )
+    try:
+        response = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.3,
+            max_tokens=2000,
+        )
+        raw = response.choices[0].message.content.strip()
+        logging.info(f"CV Parser OK, response length: {len(raw)}")
+    except Exception as api_err:
+        logging.error(f"CV Parser GROQ API ERROR: {api_err}", exc_info=True)
+        raw = ""
 
-    raw = response.choices[0].message.content.strip()
+    if not raw:
+        logging.error("CV Parser: empty response from Groq")
+        return {
+            "name": "Не определено", "email": "", "phone": "", "location": "",
+            "profession_raw": "Не определено", "profession_germany": "Требует уточнения",
+            "education": [], "experience_years": 0, "experience": [],
+            "skills": [], "languages": [], "barriers": barriers_info,
+            "workarounds": workarounds_info, "hidden_strengths": [],
+            "target_roles_de": [], "target_industries": [], "ats_keywords": [],
+            "summary_de": "", "summary_ru": "Ошибка API. Попробуйте ещё раз.",
+            "reframe": "", "clarifying_questions": [],
+            "hidden_patterns": [], "detected_professions": detected_professions,
+            "has_barriers": len(barriers_info) > 0
+        }
 
     # Убираем возможные markdown-обёртки
     raw = re.sub(r"^```json\s*", "", raw)
@@ -321,7 +340,9 @@ CV КАНДИДАТА:
 
     try:
         profile = json.loads(raw)
-    except json.JSONDecodeError:
+        logging.info(f"CV Parser JSON OK: name={profile.get('name')}")
+    except json.JSONDecodeError as json_err:
+        logging.error(f"CV Parser JSON ERROR: {json_err}, raw[:300]: {raw[:300]}")
         # Fallback: базовый профиль
         profile = {
             "name": "Не определено",
