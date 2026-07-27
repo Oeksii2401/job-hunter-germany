@@ -234,6 +234,52 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
             lang = session.get("lang", "ru")
             text = data.get("text", "").strip()
 
+            # ── Универсальные команды в любом месте диалога ──
+            reparse_words = [
+                "проверь резюме", "перечитай резюме", "проанализируй заново",
+                "перечитай cv", "reparse", "re-read cv", "analyse again",
+                "analysiere neu", "повторно проанализируй", "ще раз перевір",
+                "check cv again", "перевір резюме"
+            ]
+            if any(w in text.lower() for w in reparse_words):
+                cv_text = session.get("cv_text", "")
+                if cv_text:
+                    await websocket.send_json({
+                        "type": "message",
+                        "sender": "bot",
+                        "text": {
+                            "ru": "🔄 Перечитываю резюме более детально...",
+                            "de": "🔄 Ich lese den Lebenslauf detaillierter...",
+                            "en": "🔄 Re-reading CV in more detail...",
+                            "uk": "🔄 Перечитую резюме детальніше...",
+                            "ar": "🔄 أعيد قراءة السيرة الذاتية بتفصيل أكبر...",
+                            "ps": "🔄 CV بیا لوستل کوم...",
+                        }.get(lang, "🔄 Перечитываю резюме...")
+                    })
+                    # Добавляем инструкцию для более глубокого анализа
+                    deep_cv_text = cv_text + """
+
+ИНСТРУКЦИЯ ДЛЯ ГЛУБОКОГО АНАЛИЗА:
+- Найди ВСЕ скрытые навыки и компетенции
+- Обрати особое внимание на достижения и цифры
+- Найди неочевидные комбинации опыта
+- Предложи нестандартные роли на рынке DACH
+- Задай более точные уточняющие вопросы"""
+                    profile = await keep_alive(websocket, parse_cv(deep_cv_text, lang))
+                    await _after_parsing(websocket, session_id, lang, profile)
+                else:
+                    await websocket.send_json({
+                        "type": "message",
+                        "sender": "bot",
+                        "text": {
+                            "ru": "Резюме не найдено. Пожалуйста, загрузи его снова.",
+                            "de": "Lebenslauf nicht gefunden. Bitte lade ihn erneut hoch.",
+                            "en": "CV not found. Please upload it again.",
+                            "uk": "Резюме не знайдено. Будь ласка, завантаж його знову.",
+                        }.get(lang, "Резюме не найдено.")
+                    })
+                continue
+
             # ── Выбор языка ──────────────────────────
             if step == "lang":
                 lang_map = {
@@ -349,9 +395,41 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                 profile = json.loads(session.get("cv_profile") or "{}")
                 questions = profile.get("clarifying_questions", [])
                 q_index = profile.get("_q_index", 0)
+                current_q = questions[q_index] if q_index < len(questions) else ""
+
+                # Реагируем на ответ — живой диалог
+                react_prompt = f"""Ты — карьерный консультант. Кандидат ответил на вопрос.
+
+Вопрос был: {current_q}
+Ответ кандидата: {text}
+
+Напиши короткую живую реакцию (1-2 предложения) на {lang}:
+- Если ответ информативный — подтверди и уточни детали
+- Если ответ "нет" или краткий — не дави, просто прими к сведению
+- Если кандидат исправляет или добавляет что-то важное — поблагодари и скажи что учтёшь
+- Никаких длинных объяснений, только живая реакция
+
+Верни ТОЛЬКО текст реакции, без JSON."""
+
+                try:
+                    loop = asyncio.get_event_loop()
+                    reaction = await loop.run_in_executor(None, lambda: groq_client.chat.completions.create(
+                        model="llama-3.3-70b-versatile",
+                        messages=[{"role": "user", "content": react_prompt}],
+                        max_tokens=150,
+                    ).choices[0].message.content.strip())
+                except Exception:
+                    reaction = ""
+
+                if reaction:
+                    await websocket.send_json({
+                        "type": "message",
+                        "sender": "bot",
+                        "text": reaction
+                    })
 
                 answers = profile.get("_answers", [])
-                answers.append({"q": questions[q_index] if q_index < len(questions) else "", "a": text})
+                answers.append({"q": current_q, "a": text})
                 profile["_answers"] = answers
                 q_index += 1
                 profile["_q_index"] = q_index
