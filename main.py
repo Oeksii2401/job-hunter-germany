@@ -186,22 +186,40 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
         session = {}
         lang = "ru"
 
-    await websocket.send_json({
-        "type": "message",
-        "sender": "bot",
-        "text": (
-            "👋 Привет! / Hallo! / Hello! / Привіт! / مرحبا! / سلام!\n\n"
-            "🇷🇺 Я — Job Hunter Germany. Помогу найти работу в Германии.\n"
-            "🇩🇪 Ich bin Job Hunter Germany. Ich helfe dir, einen Job zu finden.\n"
-            "🇬🇧 I am Job Hunter Germany. I'll help you find a job in Germany.\n"
-            "🇺🇦 Я — Job Hunter Germany. Допоможу знайти роботу в Німеччині.\n"
-            "🇸🇦 أنا Job Hunter Germany. سأساعدك في إيجاد عمل في ألمانيا.\n"
-            "🇦🇫 زه Job Hunter Germany یم. زه به تاسو سره د کار موندلو کې مرسته وکړم.\n\n"
-            "Выбери язык / Wähle Sprache / Choose language / Обери мову / اختر اللغة / ژبه غوره کړئ:"
-        ),
-        "buttons": ["🇷🇺 Русский", "🇩🇪 Deutsch", "🇬🇧 English",
-                    "🇺🇦 Українська", "🇸🇦 العربية", "🇦🇫 پښتو"]
-    })
+    step = session.get("step", "lang")
+
+    # Если сессия уже активна (реконнект) — не показываем приветствие заново
+    if step and step != "lang":
+        reconnect_msgs = {
+            "ru": "🔄 Соединение восстановлено. Продолжаем с того же места...",
+            "de": "🔄 Verbindung wiederhergestellt. Weiter...",
+            "en": "🔄 Connection restored. Continuing...",
+            "uk": "🔄 З'єднання відновлено. Продовжуємо...",
+            "ar": "🔄 تم استعادة الاتصال. نكمل...",
+            "ps": "🔄 اتصال بیرته راغی. دوام...",
+        }
+        await websocket.send_json({
+            "type": "message",
+            "sender": "bot",
+            "text": reconnect_msgs.get(lang, reconnect_msgs["ru"])
+        })
+    else:
+        await websocket.send_json({
+            "type": "message",
+            "sender": "bot",
+            "text": (
+                "👋 Привет! / Hallo! / Hello! / Привіт! / مرحبا! / سلام!\n\n"
+                "🇷🇺 Я — Job Hunter Germany. Помогу найти работу в Германии.\n"
+                "🇩🇪 Ich bin Job Hunter Germany. Ich helfe dir, einen Job zu finden.\n"
+                "🇬🇧 I am Job Hunter Germany. I'll help you find a job in Germany.\n"
+                "🇺🇦 Я — Job Hunter Germany. Допоможу знайти роботу в Німеччині.\n"
+                "🇸🇦 أنا Job Hunter Germany. سأساعدك في إيجاد عمل في ألمانيا.\n"
+                "🇦🇫 زه Job Hunter Germany یم. زه به تاسو سره د کار موندلو کې مرسته وکړم.\n\n"
+                "Выбери язык / Wähle Sprache / Choose language / Обери мову / اختر اللغة / ژبه غوره کړئ:"
+            ),
+            "buttons": ["🇷🇺 Русский", "🇩🇪 Deutsch", "🇬🇧 English",
+                        "🇺🇦 Українська", "🇸🇦 العربية", "🇦🇫 پښتو"]
+        })
 
     try:
         while True:

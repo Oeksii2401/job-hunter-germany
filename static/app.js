@@ -21,12 +21,12 @@ function connect() {
         reconnectCount = 0;
         addMessage('system', '🟢 Подключено');
 
-        // Keepalive ping каждые 30 секунд — Railway обрывает idle после ~60с
+        // Keepalive ping каждые 15 секунд — Railway обрывает idle после ~60с
         pingInterval = setInterval(() => {
             if (ws.readyState === WebSocket.OPEN) {
                 ws.send(JSON.stringify({ type: 'ping' }));
             }
-        }, 30000);
+        }, 15000);
     };
 
     ws.onclose = () => {
