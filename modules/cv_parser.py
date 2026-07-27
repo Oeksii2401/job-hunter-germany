@@ -305,12 +305,17 @@ CV КАНДИДАТА:
   ]
 }}"""
 
+    import asyncio as _asyncio
     try:
-        response = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.3,
-            max_tokens=2000,
+        loop = _asyncio.get_event_loop()
+        response = await loop.run_in_executor(
+            None,
+            lambda: client.chat.completions.create(
+                model="llama-3.3-70b-versatile",
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.3,
+                max_tokens=2000,
+            )
         )
         raw = response.choices[0].message.content.strip()
         logging.info(f"CV Parser OK, response length: {len(raw)}")
