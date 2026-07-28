@@ -3,10 +3,7 @@ import json
 import logging
 import asyncio
 import re
-from groq import Groq
- 
-groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
-GROQ_MODEL = "llama-3.3-70b-versatile"
+from modules.llm_client import ask_async as groq_ask_async, clean_json
  
 # ============================================================
 # ЯЗЫКОВЫЕ НАСТРОЙКИ
@@ -349,30 +346,8 @@ def detect_hidden_patterns(cv_text: str, profile: dict) -> list:
 # ============================================================
 # ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
 # ============================================================
-def groq_ask(prompt: str) -> str:
-    response = groq_client.chat.completions.create(
-        model=GROQ_MODEL,
-        messages=[{"role": "user", "content": prompt}],
-        max_tokens=4000,
-    )
-    return response.choices[0].message.content
- 
- 
-async def groq_ask_async(prompt: str) -> str:
-    loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(None, groq_ask, prompt)
- 
- 
-def clean_json(raw: str) -> str:
-    """Убирает markdown-обёртки из JSON ответа."""
-    raw = raw.strip()
-    if raw.startswith("```"):
-        raw = raw.split("```")[1]
-        if raw.startswith("json"):
-            raw = raw[4:]
-    raw = re.sub(r"^```json\s*", "", raw)
-    raw = re.sub(r"\s*```$", "", raw)
-    return raw.strip()
+# groq_ask_async и clean_json теперь импортируются из modules.llm_client
+# (единая точка с автоматическим fallback на Gemini при исчерпании лимита Groq)
 
 
 SCRIPT_RANGES = {
@@ -453,11 +428,44 @@ async def ensure_language(profile: dict, lang: str) -> dict:
 # ============================================================
 # ОСНОВНОЙ ПАРСЕР CV
 # ============================================================
+MAX_CV_CHARS = 8000
+
+
+def clean_cv_text(cv_text: str) -> str:
+    """Убирает лишние пробелы/пустые строки из извлечённого текста резюме
+    и обрезает слишком длинные документы, чтобы не тратить токены впустую."""
+    import re as _re
+    if not cv_text:
+        return cv_text
+
+    # Схлопываем пробелы/табы внутри строк
+    lines = [_re.sub(r"[ \t]+", " ", line).strip() for line in cv_text.splitlines()]
+    # Убираем подряд идущие пустые строки, оставляя максимум одну
+    cleaned_lines = []
+    prev_blank = False
+    for line in lines:
+        if line == "":
+            if not prev_blank:
+                cleaned_lines.append(line)
+            prev_blank = True
+        else:
+            cleaned_lines.append(line)
+            prev_blank = False
+    cleaned = "\n".join(cleaned_lines).strip()
+
+    if len(cleaned) > MAX_CV_CHARS:
+        logging.warning(f"CV text truncated from {len(cleaned)} to {MAX_CV_CHARS} chars")
+        cleaned = cleaned[:MAX_CV_CHARS] + "\n[...резюме обрезано для экономии токенов...]"
+
+    return cleaned
+
+
 async def parse_cv(cv_text: str, lang: str = "ru") -> dict:
     """
     Парсит CV и возвращает структурированный профиль.
     Учитывает язык кандидата, профессиональные барьеры и скрытые паттерны.
     """
+    cv_text = clean_cv_text(cv_text)
     lang_name = LANG_NAMES.get(lang, "русском языке")
  
     # 1. Определяем барьеры на основе профессии

@@ -3,11 +3,7 @@ import json
 import logging
 import asyncio
 import re
-from groq import Groq
-
-groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
-GROQ_MODEL = "llama-3.3-70b-versatile"
-
+from modules.llm_client import ask_async as groq_ask_async, clean_json
 LANG_NAMES = {
     "ru": "русском языке",
     "de": "deutscher Sprache",
@@ -81,30 +77,7 @@ def check_ats_filters(job_requirements: str, job_title: str, company_name: str) 
     return triggered
 
 
-def groq_ask(prompt: str) -> str:
-    response = groq_client.chat.completions.create(
-        model=GROQ_MODEL,
-        messages=[{"role": "user", "content": prompt}],
-        max_tokens=4000,
-    )
-    return response.choices[0].message.content
-
-
-async def groq_ask_async(prompt: str) -> str:
-    loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(None, groq_ask, prompt)
-
-
-def clean_json(raw: str) -> str:
-    raw = raw.strip()
-    if raw.startswith("```"):
-        raw = raw.split("```")[1]
-        if raw.startswith("json"):
-            raw = raw[4:]
-    raw = re.sub(r"^```json\s*", "", raw)
-    raw = re.sub(r"\s*```$", "", raw)
-    return raw.strip()
-
+# groq_ask_async и clean_json теперь импортируются из modules.llm_client
 
 async def adapt_cv(
     profile: dict,
