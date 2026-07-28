@@ -388,7 +388,7 @@ async def analyze_profile(
       "конкретное действие 2",
       "конкретное действие 3"
     ],
-    "power_combinations": {power_combos if power_combos else []}
+    "power_combinations": {json.dumps(power_combos, ensure_ascii=False)}
   }}
 }}"""
  
