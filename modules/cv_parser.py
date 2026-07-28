@@ -373,6 +373,81 @@ def clean_json(raw: str) -> str:
     raw = re.sub(r"^```json\s*", "", raw)
     raw = re.sub(r"\s*```$", "", raw)
     return raw.strip()
+
+
+SCRIPT_RANGES = {
+    "ru": [("а", "я"), ("А", "Я"), ("ё", "ё"), ("Ё", "Ё")],
+    "uk": [("а", "я"), ("А", "Я"), ("є", "є"), ("і", "і"), ("ї", "ї"), ("ґ", "ґ")],
+    "ar": [("\u0600", "\u06FF")],
+    "ps": [("\u0600", "\u06FF")],
+}
+
+
+def _script_ratio(text: str, ranges: list) -> float:
+    """Доля букв текста, попадающих в нужный алфавитный диапазон."""
+    if not text:
+        return 0.0
+    total = sum(1 for ch in text if ch.isalpha())
+    if total == 0:
+        return 0.0
+    matched = sum(
+        1 for ch in text
+        if ch.isalpha() and any(start <= ch <= end for start, end in ranges)
+    )
+    return matched / total
+
+
+def _is_wrong_language(texts: list, lang: str) -> bool:
+    """Грубая эвристика: для ru/uk/ar/ps проверяем что текст написан нужным алфавитом.
+    Для de/en не проверяем — латиница не позволяет надёжно отличить один от другого."""
+    ranges = SCRIPT_RANGES.get(lang)
+    if not ranges:
+        return False
+    joined = " ".join(t for t in texts if t)
+    if not joined.strip():
+        return False
+    return _script_ratio(joined, ranges) < 0.3
+
+
+async def _translate_texts(texts: list, lang: str) -> list:
+    """Форсированный перевод списка строк на нужный язык, если LLM ошиблась с языком."""
+    lang_name = LANG_NAMES.get(lang, "русском языке")
+    prompt = f"""Переведи каждую строку из списка на {lang_name}. Сохрани смысл и структуру.
+Верни ТОЛЬКО JSON-массив строк в том же порядке, без markdown и комментариев.
+
+СПИСОК:
+{json.dumps(texts, ensure_ascii=False)}"""
+    try:
+        result = await groq_ask_async(prompt)
+        result = clean_json(result)
+        translated = json.loads(result)
+        if isinstance(translated, list) and len(translated) == len(texts):
+            return translated
+    except Exception as e:
+        logging.warning(f"Language fix translation failed: {e}")
+    return texts
+
+
+async def ensure_language(profile: dict, lang: str) -> dict:
+    """Проверяет ключевые текстовые поля профиля и принудительно переводит если язык не совпал."""
+    text_fields = ["hidden_competencies", "cross_domain_opportunities",
+                   "clarifying_questions", "target_companies_dach"]
+
+    all_texts = []
+    for field in text_fields:
+        all_texts.extend(profile.get(field, []))
+
+    if not _is_wrong_language(all_texts, lang):
+        return profile
+
+    logging.warning(f"Language mismatch detected for lang={lang}, forcing translation")
+
+    for field in text_fields:
+        values = profile.get(field, [])
+        if values:
+            profile[field] = await _translate_texts(values, lang)
+
+    return profile
  
  
 # ============================================================
@@ -558,6 +633,7 @@ async def parse_cv(cv_text: str, lang: str = "ru") -> dict:
         profile["detected_professions"] = detected_professions
         profile["has_barriers"] = len(barriers_info) > 0
  
+        profile = await ensure_language(profile, lang)
         return profile
  
     except Exception as e:
