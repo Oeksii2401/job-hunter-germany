@@ -108,35 +108,53 @@ async def search_companies(query: str, location: str, radius_km: int = 50) -> li
 async def find_career_page(website: str) -> str:
     """
     Пробует найти карьерную страницу компании.
-    Перебирает стандартные пути и возвращает первый рабочий URL.
+    Проверяет стандартные пути ПАРАЛЛЕЛЬНО, возвращает первый рабочий URL.
+    Ограничена общим дедлайном, чтобы не блокировать поиск компаний на минуты.
     """
     if not website:
         return ""
 
     base = website.rstrip("/")
 
+    career_signals = [
+        "stellen", "job", "karriere", "bewerbung",
+        "vacancy", "position", "opening", "hiring"
+    ]
+
+    async def check(client: httpx.AsyncClient, path: str):
+        url = base + path
+        try:
+            resp = await client.get(url)
+            if resp.status_code == 200:
+                text_lower = resp.text.lower()
+                if any(signal in text_lower for signal in career_signals):
+                    return url
+        except Exception:
+            pass
+        return None
+
+    found_url = ""
     async with httpx.AsyncClient(
         follow_redirects=True,
-        timeout=8,
+        timeout=6,
         headers={"User-Agent": "Mozilla/5.0 (compatible; JobHunterBot/1.0)"}
     ) as client:
-        for path in CAREER_URL_PATHS:
-            url = base + path
-            try:
-                resp = await client.get(url)
-                if resp.status_code == 200:
-                    # Проверяем что страница содержит что-то релевантное
-                    text_lower = resp.text.lower()
-                    career_signals = [
-                        "stellen", "job", "karriere", "bewerbung",
-                        "vacancy", "position", "opening", "hiring"
-                    ]
-                    if any(signal in text_lower for signal in career_signals):
-                        return url
-            except Exception:
-                continue
+        tasks = [asyncio.create_task(check(client, path)) for path in CAREER_URL_PATHS]
+        try:
+            for coro in asyncio.as_completed(tasks, timeout=15):
+                result = await coro
+                if result:
+                    found_url = result
+                    break
+        except (asyncio.TimeoutError, TimeoutError):
+            logging.warning(f"find_career_page timeout for {website}")
+        finally:
+            for t in tasks:
+                if not t.done():
+                    t.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
 
-    return ""
+    return found_url
 
 
 # ============================================================
