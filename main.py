@@ -735,6 +735,15 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                         "text": get_message(lang, "sending")
                     })
                 await update_session(session_id, step="menu")
+
+            else:
+                logging.warning(f"Unhandled step '{step}' for session {session_id}, resetting to ask_location")
+                await update_session(session_id, step="ask_location")
+                await websocket.send_json({
+                    "type": "message",
+                    "sender": "bot",
+                    "text": get_message(lang, "error")
+                })
  
     except WebSocketDisconnect:
         active_connections.pop(session_id, None)
@@ -849,6 +858,7 @@ async def _do_job_search(websocket, session_id, lang, profile):
             "sender": "bot",
             "text": get_message(lang, "no_companies")
         })
+        await update_session(session_id, step="ask_location")
         return
  
     await update_session(session_id,
