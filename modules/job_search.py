@@ -77,6 +77,9 @@ async def search_companies(query: str, location: str, radius_km: int = 50) -> li
     try:
         async with httpx.AsyncClient() as client:
             resp = await client.post(url, headers=headers, json=body, timeout=15)
+            if resp.status_code != 200:
+                logging.error(f"Places API {resp.status_code}: {resp.text}")
+                return []
             data = resp.json()
             places = data.get("places", [])
 
