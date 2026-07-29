@@ -4,11 +4,9 @@ import logging
 import asyncio
 import re
 import httpx
-from groq import Groq
+from modules.llm_client import ask_async
 
 GOOGLE_MAPS_API_KEY = os.getenv("GOOGLE_MAPS_API_KEY")
-groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
-GROQ_MODEL = "llama-3.3-70b-versatile"
 
 # Возможные пути карьерных страниц у немецких компаний
 CAREER_URL_PATHS = [
@@ -222,16 +220,7 @@ async def scrape_jobs(career_url: str, cv_profile: dict) -> list:
 Максимум 5 вакансий."""
 
     try:
-        loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(
-            None,
-            lambda: groq_client.chat.completions.create(
-                model=GROQ_MODEL,
-                messages=[{"role": "user", "content": prompt}],
-                max_tokens=1000,
-            ).choices[0].message.content
-        )
-
+        result = await ask_async(prompt, max_tokens=1000)
         result = result.strip()
         # Убираем markdown если есть
         if result.startswith("```"):
