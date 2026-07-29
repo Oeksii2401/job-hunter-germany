@@ -455,7 +455,7 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                         )
                     })
                 else:
-                    profile["search_queries"] = [text]
+                    profile["search_queries"] = await generate_search_queries_de(profile, text, lang)
                     await update_session(session_id,
                         cv_profile=json.dumps(profile, ensure_ascii=False),
                         step="job_search"
@@ -904,6 +904,30 @@ async def _ask_location(websocket, session_id, lang, profile):
     })
  
  
+async def generate_search_queries_de(profile: dict, direction_text: str, lang: str) -> list:
+    """Превращает свободный текст пользователя (уточнение направления поиска)
+    в корректные немецкие поисковые запросы для Google Maps.
+    При сбое — fallback на исходный текст, чтобы не блокировать поиск полностью."""
+    primary_domain = profile.get("primary_domain", "")
+    prompt = f"""Кандидат ищет работу в Германии. Основная сфера в профиле: "{primary_domain}".
+Пользователь уточнил направление поиска: "{direction_text}"
+
+Сформируй 2-3 коротких поисковых запроса НА НЕМЕЦКОМ языке для поиска компаний через Google Maps
+(в стиле "Softwareentwicklung Unternehmen", "Prompt Engineering Agentur", "Webentwicklung Firma").
+
+Верни ТОЛЬКО JSON-массив строк, без markdown:
+["запрос 1", "запрос 2", "запрос 3"]"""
+    try:
+        result = await ask_async(prompt, max_tokens=150)
+        result = re.sub(r"```.*?```", "", result, flags=re.DOTALL).strip()
+        queries = json.loads(result)
+        if isinstance(queries, list) and queries:
+            return queries
+    except Exception as e:
+        logging.warning(f"Search query generation error: {e}")
+    return [direction_text]
+
+
 async def _do_job_search(websocket, session_id, lang, profile):
     companies = await keep_alive(websocket, find_companies_for_profile(profile))
  
@@ -913,7 +937,7 @@ async def _do_job_search(websocket, session_id, lang, profile):
             "sender": "bot",
             "text": get_message(lang, "no_companies")
         })
-        await update_session(session_id, step="ask_location")
+        await update_session(session_id, step="clarify_direction")
         return
  
     await update_session(session_id,
