@@ -664,7 +664,8 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                 best_job = company.get("_adapted", {}).get("job")
  
                 adapted = await keep_alive(websocket, adapt_cv(profile, company, best_job, lang))
-                company["_adapted"] = adapted
+                # см. комментарий выше — убираем циклическую ссылку "company"
+                company["_adapted"] = {k: v for k, v in adapted.items() if k != "company"}
                 company["_lebenslauf_de"] = adapted.get("professional_summary_de", "")
                 selected[idx] = company
  
@@ -962,8 +963,10 @@ async def _process_next_company(websocket, session_id, lang, selected, idx):
  
     adapted = await keep_alive(websocket, adapt_cv(profile, company, best_job, lang))
  
-    # Сохраняем адаптированное CV в компанию в компанию для следующего шага
-    company["_adapted"] = adapted
+    # Сохраняем адаптированное CV в компанию для следующего шага
+    # (убираем ключ "company" — он ссылается на сам объект company, что даёт
+    # циклическую ссылку и ломает json.dumps: "Circular reference detected")
+    company["_adapted"] = {k: v for k, v in adapted.items() if k != "company"}
     company["_lebenslauf_de"] = adapted.get("professional_summary_de", "")
     selected[idx] = company
  
