@@ -5,6 +5,7 @@ import logging
 import asyncio
 import re
 from groq import Groq
+from modules.llm_client import ask_async
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File, Form
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse
@@ -413,6 +414,59 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                 })
                 await _do_job_search(websocket, session_id, lang, profile)
  
+            # ── Уточнение направления после отклонения списка ──
+            elif step == "clarify_direction":
+                profile = json.loads(session.get("cv_profile") or "{}")
+                companies = json.loads(session.get("companies") or "[]")
+ 
+                intent = "new_search"
+                if companies:
+                    company_names = [f"{i+1}. {c['name']}" for i, c in enumerate(companies)]
+                    classify_prompt = f"""Пользователь ранее отклонил список компаний, а теперь написал: "{text}"
+ 
+Ранее показанный список:
+{chr(10).join(company_names)}
+ 
+Определи намерение пользователя:
+- "keep_previous" — если пользователь на самом деле хочет вернуться к этому же списку компаний (например: "все подходят", "меня устраивают все", "хочу все компании которые ты нашёл", "верни список")
+- "new_search" — если пользователь описывает НОВОЕ направление поиска (другая профессия, город, "искать онлайн" и т.п.)
+ 
+Верни ТОЛЬКО JSON: {{"intent": "keep_previous"}} или {{"intent": "new_search"}}"""
+                    try:
+                        result = await ask_async(classify_prompt, max_tokens=50)
+                        result = re.sub(r"```.*?```", "", result, flags=re.DOTALL).strip()
+                        parsed = json.loads(result)
+                        if parsed.get("intent") == "keep_previous":
+                            intent = "keep_previous"
+                    except Exception as e:
+                        logging.warning(f"Direction classify error: {e}")
+ 
+                if intent == "keep_previous":
+                    await update_session(session_id, step="select_companies")
+                    company_list = "\n".join([
+                        f"{i+1}. {c['name']}\n   📍 {c.get('address', '')}\n   🌐 {c.get('website', '')}"
+                        for i, c in enumerate(companies)
+                    ])
+                    await websocket.send_json({
+                        "type": "message",
+                        "sender": "bot",
+                        "text": get_message(lang, "companies_found",
+                            count=len(companies), list=company_list
+                        )
+                    })
+                else:
+                    profile["search_queries"] = [text]
+                    await update_session(session_id,
+                        cv_profile=json.dumps(profile, ensure_ascii=False),
+                        step="job_search"
+                    )
+                    await websocket.send_json({
+                        "type": "message",
+                        "sender": "bot",
+                        "text": get_message(lang, "searching")
+                    })
+                    await _do_job_search(websocket, session_id, lang, profile)
+ 
             # ── Выбор компаний ────────────────────────
             elif step == "select_companies":
                 companies = json.loads(session.get("companies") or "[]")
@@ -464,7 +518,7 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                                 "ps": "پوه شوم. ولیکئ چې کوم لور ته لټون وکړم.",
                             }.get(lang, "Понял. Напиши в каком направлении искать.")
                         })
-                        await update_session(session_id, step="ask_location")
+                        await update_session(session_id, step="clarify_direction")
                     else:
                         await websocket.send_json({
                             "type": "message", "sender": "bot",
