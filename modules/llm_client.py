@@ -8,7 +8,10 @@ from groq import Groq
 GROQ_MODEL = "llama-3.3-70b-versatile"
 GEMINI_MODEL = "gemini-2.5-flash"
 
-groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
+# max_retries=0 — отключаем встроенные повторы Groq SDK (по умолчанию делает
+# несколько retry с задержками до 20+ сек), чтобы наш fallback на Gemini
+# срабатывал сразу при 429, а не после долгого внутреннего ожидания
+groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"), max_retries=0)
 
 _gemini_client = None
 
