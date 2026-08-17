@@ -1,6 +1,7 @@
 import os
 import re
 import json
+import time
 import asyncio
 import logging
 from groq import Groq
@@ -64,8 +65,13 @@ def ask(prompt: str, max_tokens: int = 4000) -> str:
             try:
                 return _gemini_ask(prompt)
             except Exception as e2:
-                logging.error(f"Gemini fallback тоже не сработал: {e2}")
-                raise
+                logging.warning(f"Gemini fallback не сработал с первой попытки, retry через 2с: {e2}")
+                time.sleep(2)
+                try:
+                    return _gemini_ask(prompt)
+                except Exception as e3:
+                    logging.error(f"Gemini fallback не сработал и со второй попытки: {e3}")
+                    raise
         raise
 
 

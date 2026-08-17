@@ -460,6 +460,29 @@ def clean_cv_text(cv_text: str) -> str:
     return cleaned
 
 
+_CEFR_CODE_PATTERN = re.compile(r"^[abc][12]$", re.IGNORECASE)
+
+
+def _verify_language_levels(languages: list, cv_text: str) -> list:
+    """Детерминированная проверка: если LLM указала формальный CEFR-код (A1-C2),
+    этот код должен буквально встречаться в исходном тексте резюме — иначе это
+    выдуманная сертификация, и запись убирается. Свободные словесные описания
+    (Native, Fluent, свободно и т.п.) не трогаем — это честный пересказ, не
+    формальная оценка. Промпт-инструкции 'копируй дословно' ненадёжны сами по себе."""
+    verified = []
+    cv_lower = cv_text.lower()
+    for entry in languages or []:
+        level = (entry.get("level") or "").strip()
+        lang_code = entry.get("lang", "")
+        if not level:
+            continue
+        if _CEFR_CODE_PATTERN.match(level) and level.lower() not in cv_lower:
+            logging.warning(f"Fabricated CEFR level detected and removed: {lang_code}={level!r} not found in CV text")
+            continue
+        verified.append(entry)
+    return verified
+
+
 async def parse_cv(cv_text: str, lang: str = "ru") -> dict:
     """
     Парсит CV и возвращает структурированный профиль.
@@ -622,6 +645,7 @@ async def parse_cv(cv_text: str, lang: str = "ru") -> dict:
         result = await groq_ask_async(prompt)
         result = clean_json(result)
         profile = json.loads(result)
+        profile["languages"] = _verify_language_levels(profile.get("languages", []), cv_text)
  
         # 2. Подставляем барьеры если LLM их не нашла
         if not profile.get("barriers"):
