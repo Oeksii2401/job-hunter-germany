@@ -21,13 +21,13 @@ ATS_CRITICAL_FILTERS = {
         "triggers": ["deutsch", "german", "deutschkenntnisse", "sprachkenntnisse",
                      "c1", "c2", "b2", "fließend", "verhandlungssicher", "muttersprache"],
         "description": "Требование немецкого языка",
-        "fix": "Явно указать уровень: 'Deutsch: B2 (aktiv verbessernd)' или 'Deutsch: C1'",
+        "fix": "Указать РЕАЛЬНЫЙ уровень кандидата из профиля (например 'Deutsch: A2' или 'Deutsch: Grundkenntnisse') — НЕ завышать",
         "ats_format": "Deutsch: [уровень] — в разделе Sprachkenntnisse"
     },
     "language_english": {
         "triggers": ["english", "englisch", "englischkenntnisse"],
         "description": "Требование английского языка",
-        "fix": "Явно указать: 'Englisch: C1 (verhandlungssicher)'",
+        "fix": "Указать РЕАЛЬНЫЙ уровень кандидата из профиля (например 'Englisch: Grundkenntnisse') — НЕ завышать",
         "ats_format": "Englisch: [уровень]"
     },
     "work_permit": {
@@ -123,11 +123,12 @@ HR не читал резюме — ATS отклонил автоматичес�
 
 ПРАВИЛА:
 1. Закрой ВСЕ критические фильтры явно и в правильном формате
-2. Уровни языков ВСЕГДА: "Deutsch: B2+" или "Englisch: C1 (verhandlungssicher)"
+2. Уровни языков — ТОЛЬКО из profile["languages"], дословно как там указано (например A2, B1, Grundkenntnisse, fließend, Muttersprache). НИКОГДА не завышай и не изобретай уровень, даже если вакансия требует выше. Если реальный уровень ниже требуемого — честно отметь это в adaptation_notes, а не скрывай подменой цифры.
 3. Опыт явно цифрами: "5 Jahre Berufserfahrung in..."
 4. Образование полностью: название + университет + год
 5. Локация явно: город проживания
 6. Точные ключевые слова из требований (не синонимы)
+7. НИКОГДА не изобретай факты о кандидате (уровень языков, стаж, образование, разрешение на работу, сертификаты) — используй ТОЛЬКО то, что явно есть в ПРОФИЛЬ КАНДИДАТА ниже. Отсутствующий факт — это не пробел, который нужно заполнить выдумкой, а данность, с которой нужно работать честно.
 
 ПРОФИЛЬ КАНДИДАТА:
 {json.dumps(profile, ensure_ascii=False, indent=2)}
