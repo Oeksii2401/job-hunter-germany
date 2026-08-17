@@ -4,8 +4,7 @@ import json
 import logging
 import asyncio
 import re
-from groq import Groq
-from modules.llm_client import ask_async
+from modules.llm_client import ask_async, clean_json
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File, Form
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse
@@ -26,7 +25,6 @@ app = FastAPI()
  
 active_connections: dict = {}
  
-groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
  
  
 async def keep_alive(websocket, coro):
@@ -471,33 +469,47 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
             elif step == "select_companies":
                 companies = json.loads(session.get("companies") or "[]")
  
-                # Уровень 1 — прямые цифры
-                selected_nums = [int(n.strip()) - 1 for n in text.split(",") if n.strip().isdigit()]
-                selected = [companies[i] for i in selected_nums if 0 <= i < len(companies)]
- 
-                # Уровень 2 — свободный текст → LLM интерпретирует
+                # Уровень 1 — прямые цифры, диапазоны, "все"
+                text_l1 = text.lower().strip()
+                all_words = ["все", "всё", "весь список", "all", "everything", "alle", "усі", "усе", "جميع", "ټول"]
+                if any(w in text_l1 for w in all_words):
+                    selected = list(companies)
+                else:
+                    nums_found = set()
+                    for part in re.split(r"[,\s]+", text_l1):
+                        part = part.strip(".;")
+                        if not part:
+                            continue
+                        m = re.match(r"^(\d+)\s*[-–—]\s*(\d+)$", part)
+                        if m:
+                            a, b = int(m.group(1)), int(m.group(2))
+                            nums_found.update(range(min(a, b), max(a, b) + 1))
+                        elif part.isdigit():
+                            nums_found.add(int(part))
+                    selected_nums = [n - 1 for n in nums_found]
+                    selected = [companies[i] for i in selected_nums if 0 <= i < len(companies)]
+
+                # Уровень 2 — свободный текст → LLM интерпретирует (опечатки, названия, "кроме")
                 if not selected and text.strip():
                     company_names = [f"{i+1}. {c['name']}" for i, c in enumerate(companies)]
-                    interpret_prompt = f"""Пользователь видит список компаний и написал: "{text}"
- 
+                    interpret_prompt = f"""Пользователь видит пронумерованный список компаний и написал: "{text}"
+
 Список компаний:
 {chr(10).join(company_names)}
- 
-Определи какие компании хочет выбрать пользователь.
-Если пользователь говорит что ничего не подходит — верни [].
-Если описывает предпочтения — выбери подходящие номера.
- 
-Верни ТОЛЬКО JSON массив номеров (1-based): [1, 3] или []"""
+
+Определи номера компаний, которые хочет выбрать пользователь. Учитывай:
+- опечатки и грамматические ошибки в тексте пользователя — игнорируй их и понимай смысл;
+- диапазоны ("с 1 по 5", "1-5"), перечисления через любые разделители, слова "все"/"всё"/"all";
+- упоминание компаний по названию, а не по номеру;
+- исключения ("все кроме 3" значит все номера, кроме 3-го);
+- если пользователь говорит, что ничего не подходит — верни [].
+
+Верни ТОЛЬКО валидный JSON массив номеров (1-based), без пояснений: [1, 3] или []"""
                     try:
-                        loop = asyncio.get_event_loop()
-                        interp = await loop.run_in_executor(None, lambda: groq_client.chat.completions.create(
-                            model="llama-3.3-70b-versatile",
-                            messages=[{"role": "user", "content": interpret_prompt}],
-                            max_tokens=100,
-                        ).choices[0].message.content.strip())
-                        interp = re.sub(r"```.*?```", "", interp, flags=re.DOTALL).strip()
+                        interp = await ask_async(interpret_prompt, max_tokens=300)
+                        interp = clean_json(interp)
                         nums = json.loads(interp)
-                        selected = [companies[n-1] for n in nums if isinstance(n, int) and 1 <= n <= len(companies)]
+                        selected = [companies[n - 1] for n in nums if isinstance(n, int) and 1 <= n <= len(companies)]
                     except Exception as e:
                         logging.warning(f"LLM company interpret error: {e}")
                         selected = []
