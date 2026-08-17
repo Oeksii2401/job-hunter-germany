@@ -507,6 +507,9 @@ async def parse_cv(cv_text: str, lang: str = "ru") -> dict:
 ТВОЯ ЗАДАЧА: Внимательно прочитай резюме и сделай глубокий анализ. Думай как детектив и стратег одновременно.
  
 ШАГ 1 — ФАКТЫ: Извлеки базовую информацию (имя, локация, опыт, навыки, языки).
+Для опыта работы — извлеки КАЖДУЮ должность отдельно (роль, период, работодатель) в work_history,
+как записано в резюме. НЕ обобщай и не давай общую характеристику типа опыта на этом шаге —
+это будет сделано позже строго на основе извлечённых данных.
  
 ШАГ 2 — ИНТЕРПРЕТАЦИЯ: Что на самом деле умеет этот человек?
 Примеры неочевидных связей:
@@ -534,6 +537,9 @@ async def parse_cv(cv_text: str, lang: str = "ru") -> dict:
   "name": "полное имя кандидата (или пустая строка если не указано)",
   "location": "город, страна (как указано или пустая строка)",
   "experience_years": 0,
+  "work_history": [
+    {{"role": "точное название должности из резюме", "period": "как указано в резюме (например 05.2012-03.2022 или seit 04.2026)", "type": "management" ИЛИ "individual_contributor" ИЛИ "other" — определяй СТРОГО по формулировке должности (Leiter/Direktor/Generaldirektor/Manager = management; Assistent/Ermittler/Praktikant/Sachbearbeiter = individual_contributor; неясно = other), не додумывай по контексту}}
+  ],
   "primary_domain": "основная сфера деятельности (1-3 слова)",
   "hidden_competencies": [
     "неочевидная компетенция 1 — объясни почему она есть",
@@ -650,6 +656,7 @@ async def parse_cv(cv_text: str, lang: str = "ru") -> dict:
             "name": "",
             "location": "",
             "experience_years": 0,
+            "work_history": [],
             "primary_domain": "",
             "hidden_competencies": [],
             "cross_domain_opportunities": [],

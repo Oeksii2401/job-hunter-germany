@@ -141,7 +141,7 @@ HR не читал резюме — ATS отклонил автоматичес�
 {{
   "company_name": "{company_name}",
   "job_title_target": "целевая должность на немецком",
-  "professional_summary_de": "Резюме 3-4 предложения НА НЕМЕЦКОМ — явно: опыт N лет, уровни языков, локация",
+  "professional_summary_de": "Резюме 3-4 предложения НА НЕМЕЦКОМ — явно: опыт N лет, уровни языков, локация. Тип опыта (управленческий/юридический/технический и т.д.) характеризуй ТОЛЬКО на основе profile['work_history']: если роли смешанные — укажи честно обе части (например 'N лет юридического опыта, из них M лет на руководящих позициях'), не обобщай одним ярлыком весь стаж",
   "professional_summary_candidate_lang": "То же на {lang_name}",
   "language_section": {{
     "german": "Deutsch: [уровень] ([пояснение])",
@@ -181,6 +181,7 @@ HR не читал резюме — ATS отклонил автоматичес�
             "location": profile.get("location", ""),
             "languages": profile.get("languages", []),
             "experience_years": profile.get("experience_years", 0),
+            "work_history": profile.get("work_history", []),
         }
         return adapted
 
@@ -207,6 +208,7 @@ HR не читал резюме — ATS отклонил автоматичес�
                 "location": profile.get("location", ""),
                 "languages": profile.get("languages", []),
                 "experience_years": profile.get("experience_years", 0),
+                "work_history": profile.get("work_history", []),
             }
         }
 
