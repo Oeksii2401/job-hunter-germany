@@ -581,49 +581,26 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                     await update_session(session_id, step=f"fix_cv_{idx}")
  
                 elif any(w in text.lower() for w in yes_words):
-                    # CV согласован — пишем письмо
+                    # CV согласован — спрашиваем стиль письма перед генерацией
+                    await update_session(session_id, step=f"choose_letter_style_{idx}")
                     await websocket.send_json({
                         "type": "message",
                         "sender": "bot",
                         "text": {
-                            "ru": f"Отлично! Пишу сопроводительное письмо для {company['name']}...",
-                            "de": f"Sehr gut! Ich schreibe das Anschreiben für {company['name']}...",
-                            "en": f"Great! Writing cover letter for {company['name']}...",
-                            "uk": f"Чудово! Пишу супровідний лист для {company['name']}...",
-                            "ar": f"رائع! أكتب رسالة التغطية لـ {company['name']}...",
-                            "ps": f"ښه! د {company['name']} لپاره لیک لیکم...",
-                        }.get(lang, f"Пишу письмо для {company['name']}...")
-                    })
-                    email_data = await keep_alive(websocket, write_email(profile, adapted, company, lang))
- 
-                    company["_anschreiben_de"] = email_data.get("anschreiben_de", "")
-                    company["_subject"] = email_data.get("email_subject", "")
-                    selected[idx] = company
- 
-                    await update_session(session_id,
-                        selected_companies=json.dumps(selected, ensure_ascii=False),
-                        step=f"review_{idx}"
-                    )
- 
-                    preview_de = email_data.get("anschreiben_de", "")[:600] + "..."
-                    preview_user = email_data.get("anschreiben_user", "")[:600] + "..."
- 
-                    await websocket.send_json({
-                        "type": "message",
-                        "sender": "bot",
-                        "text": get_message(lang, "review_letter",
-                            company=company["name"],
-                            lebenslauf_de=company.get("_lebenslauf_de", "")[:300] + "...",
-                            anschreiben_de=preview_de,
-                            anschreiben_user=preview_user
-                        ),
+                            "ru": "Какое письмо написать?\n\n📋 Стандартное — консервативный деловой тон.\n🎯 Смелое — честно называет слабые места и сразу их переосмысливает (хорошо работает, если есть заметные барьеры в профиле).",
+                            "de": "Welchen Anschreiben-Stil möchtest du?\n\n📋 Standard — konservativer Geschäftston.\n🎯 Mutig — benennt Schwächen offen und deutet sie sofort um.",
+                            "en": "Which letter style?\n\n📋 Standard — conservative business tone.\n🎯 Bold — names weak points openly and reframes them right away.",
+                            "uk": "Який стиль листа?\n\n📋 Стандартний — консервативний діловий тон.\n🎯 Сміливий — чесно називає слабкі місця і одразу їх переосмислює.",
+                            "ar": "أي أسلوب للرسالة؟\n\n📋 قياسي — نبرة عمل تقليدية.\n🎯 جريء — يذكر نقاط الضعف بصراحة ويعيد صياغتها فورًا.",
+                            "ps": "کوم د لیک سبک؟\n\n📋 معیاري\n🎯 زړورتیا",
+                        }.get(lang, "Какое письмо написать: стандартное или смелое?"),
                         "buttons": (
-                            ["да, отправить", "нет", "поправить"] if lang == "ru" else
-                            ["yes, send", "no", "edit"] if lang == "en" else
-                            ["ja, senden", "nein", "korrigieren"] if lang == "de" else
-                            ["так, надіслати", "ні", "виправити"] if lang == "uk" else
-                            ["نعم، أرسل", "لا", "تعديل"] if lang == "ar" else
-                            ["هو، ولیږه", "نه", "سمول"]
+                            ["стандартное", "смелое"] if lang == "ru" else
+                            ["standard", "bold"] if lang == "en" else
+                            ["Standard", "mutig"] if lang == "de" else
+                            ["стандартний", "сміливий"] if lang == "uk" else
+                            ["قياسي", "جريء"] if lang == "ar" else
+                            ["معیاري", "زړورتیا"]
                         )
                     })
                 else:
@@ -650,6 +627,63 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                     })
  
             # ── Правка CV по комментарию пользователя ─
+            # ── Выбор стиля письма → генерация ────────
+            elif step.startswith("choose_letter_style_"):
+                idx = int(step.split("_")[-1])
+                selected = json.loads(session.get("selected_companies") or "[]")
+                company = selected[idx]
+                profile = json.loads(session.get("cv_profile") or "{}")
+                adapted = company.get("_adapted", {})
+
+                bold_words = ["смелое", "смелый", "bold", "mutig", "сміливий", "جريء", "زړورتیا"]
+                letter_style = "honest_reframe" if any(w in text.lower() for w in bold_words) else "standard"
+
+                await websocket.send_json({
+                    "type": "message",
+                    "sender": "bot",
+                    "text": {
+                        "ru": f"Отлично! Пишу сопроводительное письмо для {company['name']}...",
+                        "de": f"Sehr gut! Ich schreibe das Anschreiben für {company['name']}...",
+                        "en": f"Great! Writing cover letter for {company['name']}...",
+                        "uk": f"Чудово! Пишу супровідний лист для {company['name']}...",
+                        "ar": f"رائع! أكتب رسالة التغطية لـ {company['name']}...",
+                        "ps": f"ښه! د {company['name']} لپاره لیک لیکم...",
+                    }.get(lang, f"Пишу письмо для {company['name']}...")
+                })
+                email_data = await keep_alive(websocket, write_email(profile, adapted, company, lang, style=letter_style))
+
+                company["_anschreiben_de"] = email_data.get("anschreiben_de", "")
+                company["_subject"] = email_data.get("email_subject", "")
+                selected[idx] = company
+
+                await update_session(session_id,
+                    selected_companies=json.dumps(selected, ensure_ascii=False),
+                    step=f"review_{idx}"
+                )
+
+                preview_de = email_data.get("anschreiben_de", "")[:600] + "..."
+                preview_user = email_data.get("anschreiben_user", "")[:600] + "..."
+
+                await websocket.send_json({
+                    "type": "message",
+                    "sender": "bot",
+                    "text": get_message(lang, "review_letter",
+                        company=company["name"],
+                        lebenslauf_de=company.get("_lebenslauf_de", "")[:300] + "...",
+                        anschreiben_de=preview_de,
+                        anschreiben_user=preview_user
+                    ),
+                    "buttons": (
+                        ["да, отправить", "нет", "поправить"] if lang == "ru" else
+                        ["yes, send", "no", "edit"] if lang == "en" else
+                        ["ja, senden", "nein", "korrigieren"] if lang == "de" else
+                        ["так, надіслати", "ні", "виправити"] if lang == "uk" else
+                        ["نعم، أرسل", "لا", "تعديل"] if lang == "ar" else
+                        ["هو، ولیږه", "نه", "سمول"]
+                    )
+                })
+
+
             elif step.startswith("fix_cv_"):
                 idx = int(step.split("_")[2])
                 selected = json.loads(session.get("selected_companies") or "[]")
