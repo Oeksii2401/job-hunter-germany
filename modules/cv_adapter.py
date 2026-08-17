@@ -79,6 +79,33 @@ def check_ats_filters(job_requirements: str, job_title: str, company_name: str) 
 
 # groq_ask_async и clean_json теперь импортируются из modules.llm_client
 
+LANG_DISPLAY_NAMES = {
+    "DE": "Deutsch", "EN": "Englisch", "RU": "Russisch", "UK": "Ukrainisch",
+    "FR": "Französisch", "ES": "Spanisch", "IT": "Italienisch", "PL": "Polnisch",
+    "AR": "Arabisch", "PS": "Paschtu"
+}
+
+
+def _build_language_section(languages: list) -> dict:
+    """Строит language_section СТРОГО из profile['languages'], без участия LLM.
+    Исключает любые выдумки/конвертацию уровня (например Grundkenntnisse -> A1, fließend -> C2)."""
+    german, english, other = "", "", []
+    for entry in languages or []:
+        code = (entry.get("lang") or "").upper()
+        level = (entry.get("level") or "").strip()
+        if not level:
+            continue
+        name = LANG_DISPLAY_NAMES.get(code, code.title() if code else "Sprache")
+        line = f"{name}: {level}"
+        if code == "DE":
+            german = line
+        elif code == "EN":
+            english = line
+        else:
+            other.append(line)
+    return {"german": german, "english": english, "other": other}
+
+
 async def adapt_cv(
     profile: dict,
     company: dict,
@@ -172,6 +199,7 @@ HR не читал резюме — ATS отклонил автоматичес�
         result = await groq_ask_async(prompt)
         result = clean_json(result)
         adapted = json.loads(result)
+        adapted["language_section"] = _build_language_section(profile.get("languages", []))
 
         adapted["company"] = company
         adapted["job"] = job
@@ -192,7 +220,7 @@ HR не читал резюме — ATS отклонил автоматичес�
             "job_title_target": job_title or (profile.get("cross_domain_opportunities") or [""])[0],
             "professional_summary_de": "",
             "professional_summary_candidate_lang": "",
-            "language_section": {},
+            "language_section": _build_language_section(profile.get("languages", [])),
             "personal_data_de": {},
             "key_skills_adapted": profile.get("skills", [])[:8],
             "experience_highlights": [],
