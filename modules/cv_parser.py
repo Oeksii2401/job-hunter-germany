@@ -460,15 +460,15 @@ def clean_cv_text(cv_text: str) -> str:
     return cleaned
 
 
-_CEFR_CODE_PATTERN = re.compile(r"^[abc][12]$", re.IGNORECASE)
+_CEFR_TOKEN_PATTERN = re.compile(r"\b[ABC][12]\b", re.IGNORECASE)
 
 
 def _verify_language_levels(languages: list, cv_text: str) -> list:
-    """Детерминированная проверка: если LLM указала формальный CEFR-код (A1-C2),
-    этот код должен буквально встречаться в исходном тексте резюме — иначе это
-    выдуманная сертификация, и запись убирается. Свободные словесные описания
-    (Native, Fluent, свободно и т.п.) не трогаем — это честный пересказ, не
-    формальная оценка. Промпт-инструкции 'копируй дословно' ненадёжны сами по себе."""
+    """Детерминированная проверка: если в 'level' есть формальный CEFR-токен (A1-C2),
+    даже спрятанный внутри пояснения вроде 'B2 (целевой)', этот токен должен буквально
+    встречаться в исходном тексте резюме — иначе это выдуманная сертификация, и вся
+    запись убирается. Свободные словесные описания без CEFR-токена (Native, Fluent,
+    свободно и т.п.) не трогаем. Промпт-инструкции 'копируй дословно' ненадёжны сами по себе."""
     verified = []
     cv_lower = cv_text.lower()
     for entry in languages or []:
@@ -476,8 +476,10 @@ def _verify_language_levels(languages: list, cv_text: str) -> list:
         lang_code = entry.get("lang", "")
         if not level:
             continue
-        if _CEFR_CODE_PATTERN.match(level) and level.lower() not in cv_lower:
-            logging.warning(f"Fabricated CEFR level detected and removed: {lang_code}={level!r} not found in CV text")
+        tokens = _CEFR_TOKEN_PATTERN.findall(level)
+        fabricated_token = next((t for t in tokens if t.lower() not in cv_lower), None)
+        if fabricated_token:
+            logging.warning(f"Fabricated CEFR token detected and removed: {lang_code}={level!r} (token {fabricated_token!r} not in CV text)")
             continue
         verified.append(entry)
     return verified
@@ -533,6 +535,9 @@ async def parse_cv(cv_text: str, lang: str = "ru") -> dict:
 Для опыта работы — извлеки КАЖДУЮ должность отдельно (роль, период, работодатель) в work_history,
 как записано в резюме. НЕ обобщай и не давай общую характеристику типа опыта на этом шаге —
 это будет сделано позже строго на основе извлечённых данных.
+Поле level в languages — это ТОЛЬКО текущий фактический уровень, никогда не целевой/желаемый.
+Не пиши "B2 (целевой)", "B2 (Ziel)", "target B2" и подобное — если кандидат стремится улучшить
+язык, это идёт в workarounds/barriers, а не подменяет текущий уровень.
  
 ШАГ 2 — ИНТЕРПРЕТАЦИЯ: Что на самом деле умеет этот человек?
 Примеры неочевидных связей:
