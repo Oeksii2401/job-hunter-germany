@@ -661,8 +661,8 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                     step=f"review_{idx}"
                 )
 
-                preview_de = email_data.get("anschreiben_de", "")[:600] + "..."
-                preview_user = email_data.get("anschreiben_user", "")[:600] + "..."
+                preview_de = email_data.get("anschreiben_de", "")
+                preview_user = email_data.get("anschreiben_user", "")
 
                 await websocket.send_json({
                     "type": "message",
