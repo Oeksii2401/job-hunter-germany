@@ -160,7 +160,7 @@ async def write_email(
     try:
         result = await groq_ask_async(prompt)
         result = clean_json(result)
-        email_data = json.loads(result)
+        email_data = json.loads(result, strict=False)
 
         # Добавляем метаданные
         email_data["company_name"] = company_name
@@ -236,7 +236,7 @@ async def write_followup(
     try:
         result = await groq_ask_async(prompt)
         result = clean_json(result)
-        return json.loads(result)
+        return json.loads(result, strict=False)
 
     except Exception as e:
         logging.error(f"Follow-up Writer error: {e}")

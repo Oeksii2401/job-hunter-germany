@@ -198,7 +198,7 @@ HR не читал резюме — ATS отклонил автоматичес�
     try:
         result = await groq_ask_async(prompt)
         result = clean_json(result)
-        adapted = json.loads(result)
+        adapted = json.loads(result, strict=False)
         adapted["language_section"] = _build_language_section(profile.get("languages", []))
 
         adapted["company"] = company

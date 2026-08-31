@@ -433,7 +433,7 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                     try:
                         result = await ask_async(classify_prompt, max_tokens=50)
                         result = re.sub(r"```.*?```", "", result, flags=re.DOTALL).strip()
-                        parsed = json.loads(result)
+                        parsed = json.loads(result, strict=False)
                         if parsed.get("intent") == "keep_previous":
                             intent = "keep_previous"
                     except Exception as e:
@@ -508,7 +508,7 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                     try:
                         interp = await ask_async(interpret_prompt, max_tokens=300)
                         interp = clean_json(interp)
-                        nums = json.loads(interp)
+                        nums = json.loads(interp, strict=False)
                         selected = [companies[n - 1] for n in nums if isinstance(n, int) and 1 <= n <= len(companies)]
                     except Exception as e:
                         logging.warning(f"LLM company interpret error: {e}")
@@ -966,7 +966,7 @@ async def generate_search_queries_de(profile: dict, direction_text: str, lang: s
     try:
         result = await ask_async(prompt, max_tokens=150)
         result = re.sub(r"```.*?```", "", result, flags=re.DOTALL).strip()
-        queries = json.loads(result)
+        queries = json.loads(result, strict=False)
         if isinstance(queries, list) and queries:
             return queries
     except Exception as e:

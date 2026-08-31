@@ -395,7 +395,7 @@ async def _translate_texts(texts: list, lang: str) -> list:
     try:
         result = await groq_ask_async(prompt)
         result = clean_json(result)
-        translated = json.loads(result)
+        translated = json.loads(result, strict=False)
         if isinstance(translated, list) and len(translated) == len(texts):
             return translated
     except Exception as e:
@@ -649,7 +649,7 @@ async def parse_cv(cv_text: str, lang: str = "ru") -> dict:
     try:
         result = await groq_ask_async(prompt)
         result = clean_json(result)
-        profile = json.loads(result)
+        profile = json.loads(result, strict=False)
         profile["languages"] = _verify_language_levels(profile.get("languages", []), cv_text)
  
         # 2. Подставляем барьеры если LLM их не нашла
@@ -818,7 +818,7 @@ async def enrich_profile(profile: dict, qa_pairs: list, lang: str = "ru") -> dic
     try:
         result = await groq_ask_async(prompt)
         result = clean_json(result)
-        enriched = json.loads(result)
+        enriched = json.loads(result, strict=False)
  
         # Сохраняем скрытые паттерны из оригинала если LLM их потеряла
         if not enriched.get("hidden_patterns") and profile.get("hidden_patterns"):

@@ -371,7 +371,7 @@ async def analyze_profile(
     try:
         result = await groq_ask_async(prompt)
         result = clean_json(result)
-        enriched = json.loads(result)
+        enriched = json.loads(result, strict=False)
  
         # Сохраняем метаданные из оригинала
         enriched["detected_professions"] = profile.get("detected_professions", [])
