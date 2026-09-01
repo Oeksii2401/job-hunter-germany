@@ -176,7 +176,29 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
     await websocket.accept()
     active_connections[session_id] = websocket
     logging.info(f"WS connected: {session_id}")
- 
+
+    lang = "ru"  # обновляется ниже; нужен здесь заранее для замыкания _send_json_with_restart
+
+    # ── Универсальная кнопка "В начало" на КАЖДОМ сообщении бота ──
+    # Оборачиваем send_json один раз для этого соединения — не нужно
+    # трогать все ~40 мест, где бот отправляет сообщения. Замыкание видит
+    # актуальное значение lang на момент вызова (переменная той же функции).
+    _original_send_json = websocket.send_json
+
+    async def _send_json_with_restart(data: dict):
+        if data.get("type") == "message":
+            restart_btn = {
+                "ru": "🏠 В начало", "de": "🏠 Zum Anfang", "en": "🏠 Start over",
+                "uk": "🏠 На початок", "ar": "🏠 البداية", "ps": "🏠 پیل ته",
+            }.get(lang, "🏠 В начало")
+            buttons = list(data.get("buttons") or [])
+            if restart_btn not in buttons:
+                buttons.append(restart_btn)
+            data = {**data, "buttons": buttons}
+        await _original_send_json(data)
+
+    websocket.send_json = _send_json_with_restart
+
     try:
         session = await get_session(session_id)
         lang = session.get("lang", "ru")
@@ -232,7 +254,28 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
             step = session.get("step", "lang")
             lang = session.get("lang", "ru")
             text = data.get("text", "").strip()
- 
+
+            # ── Глобальный перехват "В начало" (работает на любом шаге) ──
+            restart_triggers = ["🏠 в начало", "🏠 zum anfang", "🏠 start over",
+                                 "🏠 на початок", "🏠 البداية", "🏠 پیل ته"]
+            if text.lower().strip() in restart_triggers:
+                await update_session(session_id,
+                    step="lang", cv_text="", cv_profile="{}",
+                    companies="[]", selected_companies="[]"
+                )
+                await websocket.send_json({
+                    "type": "message",
+                    "sender": "bot",
+                    "text": (
+                        "🔄 Начинаем заново!\n\n"
+                        "👋 Привет! / Hallo! / Hello! / Привіт! / مرحبا! / سلام!\n\n"
+                        "Выбери язык / Wähle Sprache / Choose language / Обери мову / اختر اللغة / ژبه غوره کړئ:"
+                    ),
+                    "buttons": ["🇷🇺 Русский", "🇩🇪 Deutsch", "🇬🇧 English",
+                                "🇺🇦 Українська", "🇸🇦 العربية", "🇦🇫 پښتو"]
+                })
+                continue
+
             # ── Выбор языка ──────────────────────────
             if step == "lang":
                 lang_map = {
