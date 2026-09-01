@@ -714,6 +714,7 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
 
                 company["_anschreiben_de"] = email_data.get("anschreiben_de", "")
                 company["_subject"] = email_data.get("email_subject", "")
+                company["_letter_style"] = letter_style
                 selected[idx] = company
 
                 await update_session(session_id,
@@ -743,6 +744,63 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                     )
                 })
 
+
+            # ── Правка письма по комментарию кандидата ──
+            elif step.startswith("edit_letter_"):
+                idx = int(step.split("_")[-1])
+                selected = json.loads(session.get("selected_companies") or "[]")
+                company = selected[idx]
+                profile = json.loads(session.get("cv_profile") or "{}")
+                adapted = company.get("_adapted", {})
+                letter_style = company.get("_letter_style", "standard")
+
+                await websocket.send_json({
+                    "type": "message",
+                    "sender": "bot",
+                    "text": {
+                        "ru": "Переписываю письмо с учётом правки...",
+                        "de": "Ich überarbeite das Anschreiben...",
+                        "en": "Rewriting the letter...",
+                        "uk": "Переписую лист з урахуванням правки...",
+                        "ar": "أعيد كتابة الرسالة...",
+                        "ps": "لیک بیا لیکم...",
+                    }.get(lang, "Переписываю письмо...")
+                })
+
+                email_data = await keep_alive(websocket, write_email(
+                    profile, adapted, company, lang, style=letter_style, fix_note=text
+                ))
+
+                company["_anschreiben_de"] = email_data.get("anschreiben_de", "")
+                company["_subject"] = email_data.get("email_subject", "")
+                selected[idx] = company
+
+                await update_session(session_id,
+                    selected_companies=json.dumps(selected, ensure_ascii=False),
+                    step=f"review_{idx}"
+                )
+
+                preview_de = email_data.get("anschreiben_de", "")
+                preview_user = email_data.get("anschreiben_user", "")
+
+                await websocket.send_json({
+                    "type": "message",
+                    "sender": "bot",
+                    "text": get_message(lang, "review_letter",
+                        company=company["name"],
+                        lebenslauf_de=company.get("_lebenslauf_de", "")[:300] + "...",
+                        anschreiben_de=preview_de,
+                        anschreiben_user=preview_user
+                    ),
+                    "buttons": (
+                        ["да, отправить", "нет", "поправить"] if lang == "ru" else
+                        ["yes, send", "no", "edit"] if lang == "en" else
+                        ["ja, senden", "nein", "korrigieren"] if lang == "de" else
+                        ["так, надіслати", "ні", "виправити"] if lang == "uk" else
+                        ["نعم، أرسل", "لا", "تعديل"] if lang == "ar" else
+                        ["هو، ولیږه", "نه", "سمول"]
+                    )
+                })
 
             elif step.startswith("fix_cv_"):
                 idx = int(step.split("_")[2])

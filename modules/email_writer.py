@@ -28,7 +28,8 @@ async def write_email(
     adapted_cv: dict,
     company: dict,
     lang: str = "ru",
-    style: str = "standard"
+    style: str = "standard",
+    fix_note: str = ""
 ) -> dict:
     """
     Генерирует мотивационное письмо (Anschreiben).
@@ -91,6 +92,15 @@ async def write_email(
 ═══════════════════════════════════════
 """
 
+    fix_instructions = ""
+    if fix_note:
+        fix_instructions = f"""
+═══════════════════════════════════════
+ПРАВКА ОТ КАНДИДАТА (обязательно учти при переписывании письма, это важнее общих правил ниже):
+{fix_note}
+═══════════════════════════════════════
+"""
+
     prompt = f"""Ты — эксперт по деловой переписке для рынка DACH (Германия, Австрия, Швейцария).
 Ты знаешь немецкую деловую культуру изнутри и умеешь писать письма которые проходят ATS-фильтры.
 
@@ -116,6 +126,7 @@ async def write_email(
 - Профессиональное резюме (DE): {summary_de}
 - Адаптированные навыки: {', '.join(key_skills[:6])}
 
+{fix_instructions}
 {style_instructions}
 ═══════════════════════════════════════
 ПРАВИЛА НЕМЕЦКОГО ANSCHREIBEN:
