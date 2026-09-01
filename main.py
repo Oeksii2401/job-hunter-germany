@@ -459,29 +459,38 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
             elif step == "clarify_direction":
                 profile = json.loads(session.get("cv_profile") or "{}")
                 companies = json.loads(session.get("companies") or "[]")
- 
-                intent = "new_search"
-                if companies:
+
+                filler_words = ["давай", "да", "ок", "окей", "хорошо", "расширь", "расширить",
+                                 "попробуй", "попробуй ещё", "ещё раз", "yes", "ok", "sure",
+                                 "try again", "ja", "gerne", "so", "так"]
+
+                if text.lower().strip() in filler_words:
+                    intent = "keep_previous" if companies else "retry_wider"
+                else:
+                    intent = "new_search"
                     company_names = [f"{i+1}. {c['name']}" for i, c in enumerate(companies)]
-                    classify_prompt = f"""Пользователь ранее отклонил список компаний, а теперь написал: "{text}"
- 
+                    list_context = chr(10).join(company_names) if companies else "(список пуст — предыдущий поиск не дал результатов)"
+                    classify_prompt = f"""Пользователь ранее отклонил список компаний (или поиск не дал результатов), а теперь написал: "{text}"
+
 Ранее показанный список:
-{chr(10).join(company_names)}
- 
+{list_context}
+
 Определи намерение пользователя:
-- "keep_previous" — если пользователь на самом деле хочет вернуться к этому же списку компаний (например: "все подходят", "меня устраивают все", "хочу все компании которые ты нашёл", "верни список")
-- "new_search" — если пользователь описывает НОВОЕ направление поиска (другая профессия, город, "искать онлайн" и т.п.)
- 
-Верни ТОЛЬКО JSON: {{"intent": "keep_previous"}} или {{"intent": "new_search"}}"""
+- "keep_previous" — хочет вернуться к этому же списку компаний (например: "все подходят", "верни список"). Возможно только если список НЕ пуст.
+- "retry_wider" — короткий подтверждающий ответ БЕЗ описания нового направления (например: "давай", "попробуй ещё", "хорошо") — значит просто попробовать снова с более широким радиусом поиска, направление не менялось
+- "new_search" — описывает НОВОЕ направление поиска (другая профессия, город, конкретная отрасль)
+
+Верни ТОЛЬКО JSON: {{"intent": "keep_previous"}} или {{"intent": "retry_wider"}} или {{"intent": "new_search"}}"""
                     try:
                         result = await ask_async(classify_prompt, max_tokens=50)
                         result = re.sub(r"```.*?```", "", result, flags=re.DOTALL).strip()
                         parsed = json.loads(result, strict=False)
-                        if parsed.get("intent") == "keep_previous":
-                            intent = "keep_previous"
+                        parsed_intent = parsed.get("intent")
+                        if parsed_intent in ("keep_previous", "retry_wider", "new_search"):
+                            intent = parsed_intent
                     except Exception as e:
                         logging.warning(f"Direction classify error: {e}")
- 
+
                 if intent == "keep_previous":
                     await update_session(session_id, step="select_companies")
                     company_list = "\n".join([
@@ -495,6 +504,14 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                             count=len(companies), list=company_list
                         )
                     })
+                elif intent == "retry_wider":
+                    await update_session(session_id, step="job_search")
+                    await websocket.send_json({
+                        "type": "message",
+                        "sender": "bot",
+                        "text": get_message(lang, "searching")
+                    })
+                    await _do_job_search(websocket, session_id, lang, profile, radius_km=100)
                 else:
                     profile["search_queries"] = await generate_search_queries_de(profile, text, lang)
                     await update_session(session_id,
@@ -1021,8 +1038,8 @@ async def generate_search_queries_de(profile: dict, direction_text: str, lang: s
     return [direction_text]
 
 
-async def _do_job_search(websocket, session_id, lang, profile):
-    companies = await keep_alive(websocket, find_companies_for_profile(profile))
+async def _do_job_search(websocket, session_id, lang, profile, radius_km: int = 50):
+    companies = await keep_alive(websocket, find_companies_for_profile(profile, radius_km=radius_km))
  
     if not companies:
         await websocket.send_json({

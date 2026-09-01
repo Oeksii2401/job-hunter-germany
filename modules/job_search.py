@@ -22,6 +22,19 @@ CAREER_URL_PATHS = [
     "/de/karriere",
 ]
 
+# Типы мест из Google Places, которые точно не являются работодателями —
+# используются для фильтрации мусорных результатов при широком/нечётком запросе
+IRRELEVANT_PLACE_TYPES = {
+    "tourist_attraction", "museum", "zoo", "park", "monument", "historical_landmark",
+    "cemetery", "place_of_worship", "church", "mosque", "synagogue", "hindu_temple",
+    "amusement_park", "aquarium", "art_gallery", "casino", "night_club", "movie_theater",
+    "stadium", "campground", "rv_park", "correctional_facility", "clothing_store",
+    "shoe_store", "jewelry_store", "florist", "pet_store", "animal_shelter",
+    "beauty_salon", "hair_care", "spa", "gym", "playground", "bowling_alley",
+    "amusement_center", "water_park", "national_park", "natural_feature",
+    "tourist_information_center", "visitor_center", "local_government_office",
+}
+
 
 # ============================================================
 # ГЕОКОДИРОВАНИЕ
@@ -57,7 +70,7 @@ async def search_companies(query: str, location: str, radius_km: int = 50) -> li
     headers = {
         "Content-Type": "application/json",
         "X-Goog-Api-Key": GOOGLE_MAPS_API_KEY,
-        "X-Goog-FieldMask": "places.displayName,places.formattedAddress,places.websiteUri"
+        "X-Goog-FieldMask": "places.displayName,places.formattedAddress,places.websiteUri,places.types"
     }
     body = {
         "textQuery": f"{query} in {location}",
@@ -86,6 +99,9 @@ async def search_companies(query: str, location: str, radius_km: int = 50) -> li
                 name = place.get("displayName", {}).get("text", "")
                 address = place.get("formattedAddress", "")
                 website = place.get("websiteUri", "")
+                place_types = set(place.get("types", []))
+                if place_types & IRRELEVANT_PLACE_TYPES:
+                    continue
                 if name:
                     companies.append({
                         "name": name,
@@ -242,7 +258,7 @@ async def scrape_jobs(career_url: str, cv_profile: dict) -> list:
 # ============================================================
 # ОСНОВНАЯ ФУНКЦИЯ: ПОИСК КОМПАНИЙ С ВАКАНСИЯМИ
 # ============================================================
-async def find_companies_for_profile(cv_profile: dict, scrape: bool = True) -> list:
+async def find_companies_for_profile(cv_profile: dict, scrape: bool = True, radius_km: int = 50) -> list:
     """
     Ищет компании для кандидата на основе его профиля.
     Опционально скрапит карьерные страницы для реальных вакансий.
@@ -266,7 +282,7 @@ async def find_companies_for_profile(cv_profile: dict, scrape: bool = True) -> l
     seen_names = set()
 
     for query in search_queries[:3]:
-        companies = await search_companies(query, location, radius_km=50)
+        companies = await search_companies(query, location, radius_km=radius_km)
         for company in companies:
             if company["name"] not in seen_names:
                 seen_names.add(company["name"])
